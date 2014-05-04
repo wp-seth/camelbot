@@ -1,0 +1,197 @@
+=head1 NAME
+
+camelbot manipulates wiki pages
+
+=head1 DESCRIPTION
+
+this program is a CLI tool for manipulation pages of a MediaWiki. One of the main 
+tasks is the replacement of external links (urls)
+
+=head1 SYNOPSIS
+
+camelbot [options]
+
+general options:
+
+ -c, --cat-change              replaces categories 
+     --delete                  delete some pre-defined pages
+     --download-by-prefix=s    download pages (and used images) with given prefix
+     --irc                     start irc bot (for w:de)
+ -l, --link-replacement        replaces links 
+     --text-replacement        replaces text 
+ -m, --minor=[01]              mark edit(s) as minor (1) or not (0), default = 1
+     --parse=s                 parses wikitext from file and saves result as new 
+                                file
+     --save_as_html=s          saves a given wiki page as local html-file
+ -t, --test                    don't change anything, just print possible changes
+     --update-editfilter-index update edit filter index (at w:de)
+     --upload                  upload a file
+                               iff this param is set, you should additionally set 
+                               the following params, too.
+       --usource=s              source filename (e.g. '../somefile.txt')
+       --usummary=s             a summary/description of the file
+                                 (e.g. "robot cat with hat\\n\\n[[Category:Nonsense]]")
+       --udest=s                destination filename (e.g. 'a_descriptive_name.txt')
+     --usercontribs            fetch user contributions
+     --username=s              login as different user (default = shell login name)
+
+meta options:
+
+ -V, --version                 display version and exit.
+ -h, --help                    display brief help
+     --man                     display long help (man page)
+ -q, --silent                  same as --verbose=0
+ -v, --verbose                 same as --verbose=1 (default)
+ -vv,--very-verbose            same as --verbose=2
+ -v, --verbose=x               grade of verbosity
+                                x=0: no output
+                                x=1: default output
+                                x=2: much output
+
+=head1 EXAMPLES
+
+camelbot -cl
+  replaces links and cats.
+
+=head1 OPTIONS
+
+=head2 GENERAL
+
+=over 8
+
+=item B<--cat-change>, B<-c>
+
+replaces categories 
+
+=item B<--delete>
+
+delete some pre-defined pages
+
+=item B<--download-by-prefix>=I<string>
+
+download pages by given prefix and save the pages wieth the extension '.wikitext'.
+all images used in those pages will be downloaded too.
+
+=item B<--irc>
+
+start an irc bot. this will only be useful in de-wikipedia.
+
+=item B<--link-replacement>, B<-l>
+
+replace links
+
+=item B<--minor>, B<--no-minor>
+
+mark edit(s) as minor or not, default = B<--minor>.
+
+=item B<--parse>=I<filename>
+
+parses wikitext from file and saves result to file with same name but with 
+extension .html.
+
+=item B<--save-as-html>=I<pagename>
+
+parses wikitext of given page and saves result to file with same name but with 
+extension .html.
+
+=item B<--test>, B<-t>
+
+don't change anything, just print possible changes.
+
+=item B<--text-replacement>
+
+replace content of pages
+
+=item B<--update-editfilter-index>
+
+update overview of discussions concerning single rules of edit filter (in w:de)
+
+=item B<--upload>
+
+upload a file iff this param is set, you should additionally set the following 
+params, too.
+
+=item B<--usource>=I<string>
+
+requires B<--upload> to be set.
+source filename (e.g. '../somefile.txt')
+
+=item B<--usummary>=I<string>
+
+requires B<--upload> to be set.
+a summary/description of the file (e.g. "robot cat with hat\\n\\n[[Category:Nonsense]]")
+
+=item B<--udest>=I<string>
+
+requires B<--upload> to be set.
+destination filename (e.g. 'a_descriptive_name.txt')
+
+=item B<--username=>I<string>
+
+login as different user. default: I<string> = shell login name
+
+=back
+
+=head2 META
+
+=over 8
+
+=item B<--version>, B<-V>
+
+prints version and exits.
+
+=item B<--help>, B<-h>, B<-?>
+
+prints a brief help message and exits.
+
+=item B<--man>
+
+prints the manual page and exits.
+
+=item B<--verbose>=I<number>, B<-v> I<number>
+
+set grade of verbosity to I<number>. if I<number>==0 then no output
+will be given, except hard errors. the higher I<number> is, the more 
+output will be printed. default: I<number> = 1.
+
+=item B<--silent, --quiet, -q>
+
+same as B<--verbose=0>.
+
+=item B<--very-verbose, -vv>
+
+same as B<--verbose=2>. you may use B<-vvv> for B<--verbose=3> a.s.o.
+
+=item B<--verbose, -v>
+
+same as B<--verbose=1>.
+
+=back
+
+=head1 LICENCE
+
+Copyright (c) 2014, seth
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+originally written by seth (see https://github.com/wp-seth/camelbot)
