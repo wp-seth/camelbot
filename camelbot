@@ -775,6 +775,7 @@ sub login{
 		protocol    => $address_params{'protocol'},
 		host        => $address_params{'host'},
 		path        => $address_params{'path'},
+		operator    => 'lustiger_seth',
 		debug       => 1,
 		login_data  => {
 			username => $wiki_user_norm,
@@ -1224,7 +1225,7 @@ sub update_edit_filter_index{
 	my $max_num_talk_pages = 15;
 	my $max_num_days_age = 5;
 	my $edit_filter_name = 'Bearbeitungsfilter';
-	# https://de.wikipedia.org/w/api.php?action=query&generator=allpages&gapnamespace=4&gapprefix=Bearbeitungsfilter/&gapfilterredir=nonredirects&gaplimit=500&prop=info&list=users
+	# https://de.wikipedia.org/w/api.php?action=query&generator=allpages&gapnamespace=4&gapprefix=Bearbeitungsfilter/&gapfilterredir=nonredirects&gaplimit=500&prop=info|revisions&rvprop=content|timestamp
 	$mw->{config}->{api_url} = $options->{'api'};
 	my $query = {
 		action         => 'query',
@@ -1232,7 +1233,7 @@ sub update_edit_filter_index{
 		gapnamespace   => 4, 
 	  gapprefix      => $edit_filter_name.'/',
 		gapfilterredir => 'nonredirects',
-		gaplimit       => 500,
+		gaplimit       => 50, # 500 will lead to strange errors
 		prop           => 'info|revisions',
 		rvprop         => 'content|timestamp',
 	};
