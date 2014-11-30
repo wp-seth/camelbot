@@ -59,6 +59,9 @@ $main::VERSION = '0.62.20141115';
 # sub get_user_contribs
 # 	get list of pages edited by user
 #
+# sub get_pages_by_prefix
+# 	get all pages and their latest content by prefix
+#
 # sub is_allowed
 # 	checks whether bot-template is placed on a page and forbids editing
 #
@@ -386,6 +389,50 @@ sub get_user_contribs{
 		}
 	#}
 	return \%list_of_articles;
+}
+
+sub get_pages_by_prefix{
+	my $mw     = shift;
+	my $params = shift;
+	my $query = {
+		'action'         => 'query',
+		'continue'       => '',
+		'generator'      => 'allpages', 
+		'gapnamespace'   => $params->{'namespace_id'}, 
+		'gapprefix'      => $params->{'prefix'}.'/',
+		'gapfilterredir' => 'nonredirects',
+		'gaplimit'       => '500',
+		'prop'           => 'info|revisions',
+		'rvprop'         => 'content|timestamp',
+	};
+	my $mw_options = {'max' => 1};
+	my $finished = 0;
+	my @results;
+	my $rvcont_old = 0;
+	my $rvcont;
+	while(!$finished){
+		my $pages = $mw->api($query, $mw_options) or die $mw->{'error'}->{'code'}.': '.$mw->{'error'}->{'details'};
+		if(defined $pages->{'continue'}){
+			while(my ($k, $v) = each(%{$pages->{'continue'}})){
+				$query->{$k} = $v;
+			}
+			$rvcont = $pages->{'continue'}->{'rvcontinue'};
+			$rvcont =~s/\|.*//;
+		}else{
+			$finished = 1;
+		}
+		push @results, grep {
+			(not defined $params->{'title_re'} or $_->{'title'} =~ /$params->{'title_re'}/)
+			and (not defined $rvcont or $_->{'pageid'} < $rvcont)
+			and $_->{'pageid'} >= $rvcont_old
+		} values %{$pages->{'query'}->{'pages'}};
+		$rvcont_old = $rvcont;
+		undef $rvcont;
+		#if(defined $pages->{'batchcomplete'}){
+		#	print Dumper $pages->{'batchcomplete'};
+		#}
+	}
+	return \@results;
 }
 
 sub is_allowed{
@@ -1227,22 +1274,13 @@ sub update_edit_filter_index{
 	my $edit_filter_name = 'Bearbeitungsfilter';
 	# https://de.wikipedia.org/w/api.php?action=query&generator=allpages&gapnamespace=4&gapprefix=Bearbeitungsfilter/&gapfilterredir=nonredirects&gaplimit=500&prop=info|revisions&rvprop=content|timestamp
 	$mw->{config}->{api_url} = $options->{'api'};
-	my $query = {
-		action         => 'query',
-		generator      => 'allpages', 
-		gapnamespace   => 4, 
-	  gapprefix      => $edit_filter_name.'/',
-		gapfilterredir => 'nonredirects',
-		gaplimit       => 50, # 500 will lead to strange errors
-		prop           => 'info|revisions',
-		rvprop         => 'content|timestamp',
-	};
-	my $mw_options = {'max' => 1};
-	my $pages = $mw->api($query, $mw_options) or die $mw->{'error'}->{'code'}.': '.$mw->{'error'}->{'details'};
-	$pages = [
-		sort {$b->{'revisions'}->[0]->{'timestamp'} cmp $a->{'revisions'}->[0]->{'timestamp'}} 
-		grep {$_->{'title'} =~/^Wikipedia:$edit_filter_name\/\d+/} 
-		values %{$pages->{'query'}->{'pages'}}
+	my $pages = [
+		sort {$b->{'revisions'}->[0]->{'timestamp'} cmp $a->{'revisions'}->[0]->{'timestamp'}}
+		@{get_pages_by_prefix($mw, {
+			'namespace_id' => 4,
+			'prefix'       => $edit_filter_name,
+			'title_re'     => qr/^Wikipedia:$edit_filter_name\/\d+/,
+		})}
 	];
 	my $i = 0;
 	my $tables = [{
@@ -1617,7 +1655,7 @@ if($params->{'irc'}){
 				# parse rc message
 				my $rc_msg = ::parse_rc($message->{body}, $options{'verbose'});
 				#print ::Dumper $rc_msg;
-				# VM
+				# edit filter
 				if($rc_msg->{page} =~ /^Wikipedia:$edit_filter_name_re\/\d+$/){
 					::update_edit_filter_index($bot, $mw, \%options);
 				}
