@@ -399,7 +399,7 @@ sub get_pages_by_prefix{
 		'continue'       => '',
 		'generator'      => 'allpages', 
 		'gapnamespace'   => $params->{'namespace_id'}, 
-		'gapprefix'      => $params->{'prefix'}.'/',
+		'gapprefix'      => $params->{'prefix'},
 		'gapfilterredir' => 'nonredirects',
 		'gaplimit'       => '500',
 		'prop'           => 'info|revisions',
@@ -408,26 +408,29 @@ sub get_pages_by_prefix{
 	my $mw_options = {'max' => 1};
 	my $finished = 0;
 	my @results;
-	my $rvcont_old = 0;
-	my $rvcont;
+	my $rvcont_old;
 	while(!$finished){
+		my $rvcont;
 		my $pages = $mw->api($query, $mw_options) or die $mw->{'error'}->{'code'}.': '.$mw->{'error'}->{'details'};
+		#print Dumper [keys $pages];
 		if(defined $pages->{'continue'}){
+			#print Dumper $pages->{'continue'};
 			while(my ($k, $v) = each(%{$pages->{'continue'}})){
 				$query->{$k} = $v;
 			}
-			$rvcont = $pages->{'continue'}->{'rvcontinue'};
-			$rvcont =~s/\|.*//;
+			if(defined $pages->{'continue'}->{'rvcontinue'}){
+				$rvcont = $pages->{'continue'}->{'rvcontinue'};
+				$rvcont =~s/\|.*//;
+			}
 		}else{
 			$finished = 1;
 		}
 		push @results, grep {
 			(not defined $params->{'title_re'} or $_->{'title'} =~ /$params->{'title_re'}/)
 			and (not defined $rvcont or $_->{'pageid'} < $rvcont)
-			and $_->{'pageid'} >= $rvcont_old
+			and (not defined $rvcont_old or $_->{'pageid'} >= $rvcont_old)
 		} values %{$pages->{'query'}->{'pages'}};
 		$rvcont_old = $rvcont;
-		undef $rvcont;
 		#if(defined $pages->{'batchcomplete'}){
 		#	print Dumper $pages->{'batchcomplete'};
 		#}
@@ -1278,7 +1281,7 @@ sub update_edit_filter_index{
 		sort {$b->{'revisions'}->[0]->{'timestamp'} cmp $a->{'revisions'}->[0]->{'timestamp'}}
 		@{get_pages_by_prefix($mw, {
 			'namespace_id' => 4,
-			'prefix'       => $edit_filter_name,
+			'prefix'       => $edit_filter_name.'/',
 			'title_re'     => qr/^Wikipedia:$edit_filter_name\/\d+/,
 		})}
 	];
