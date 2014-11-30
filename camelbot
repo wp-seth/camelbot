@@ -23,7 +23,7 @@ use Tk::DiffText;          # graphical diff tool
 use POSIX qw/strftime/;
 use Time::Local; # timegm
 
-$main::VERSION = '0.62.20141115';
+$main::VERSION = '0.63.20141130';
 
 # functions
 # =========
