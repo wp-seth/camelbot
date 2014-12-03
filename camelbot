@@ -23,7 +23,10 @@ use Tk::DiffText;          # graphical diff tool
 use POSIX qw/strftime/;
 use Time::Local; # timegm
 
-$main::VERSION = '0.63.20141130';
+# global vars
+$main::VERSION = '0.63.20141203';
+my $_re_url_class = qr/[^\]\[<>"'\x00-\x20\x7F)]|\)(?!\s)/;
+# comment 2014-12-03, seth: char class $_re_url_class contained | char in function cleanup_wiki_page; now deleted
 
 # functions
 # =========
@@ -219,12 +222,21 @@ sub cat_rename{
 sub cleanup_wiki_page{
 	my $text = shift; # ref to string
 	my $verb_lvl = shift // 1;         # level of verbosity
-	my $re_url_class = qr/[^\]|[<>"'\x00-\x20\x7F)]|\)(?!\s)/; 
-	test_and_replace($text, qr/http:\/\/http:?\/\/($re_url_class+)/m, '"http:\/\/$1"', $verb_lvl);
-	# "Infobox Band" and "Infobox Ort in der Ukraine" do not set prefix "http://" automatically
-	if($$text!~/\{\{Infobox (?:Band|Ort in der Ukraine|EU-Ratspr.{1,4}sidentschaft)/){
-		test_and_replace($text, qr/\|\s*(?:KreisWebseite|OFFIZIELLE_WEBSEITE|web|Webpr.{1,4}senz||[Ww]ebse?ite|WEBSITE|WWW)\s*=\s*\Khttp:\/\/($re_url_class+)/m, '"$1"', $verb_lvl);
-	}
+
+	# == link fixes ==
+	# === double protocol ===
+	test_and_replace($text, qr/http:\/\/http:?\/\/($_re_url_class+)/m, '"http:\/\/$1"', $verb_lvl);
+	#  "Infobox Band" and "Infobox Ort in der Ukraine" do not set prefix "http://" automatically
+	#if($$text!~/\{\{Infobox (?:Band|Ort in der Ukraine|EU-Ratspr.{1,4}sidentschaft)/){
+	#	test_and_replace($text, qr/\|\s*(?:KreisWebseite|OFFIZIELLE_WEBSEITE|web|Webpr.{1,4}senz||[Ww]ebse?ite|WEBSITE|WWW)\s*=\s*\Khttp:\/\/($_re_url_class+)/m, '"$1"', $verb_lvl);
+	#}
+
+	# === specific domains ===
+	# see [https://de.wikipedia.org/w/index.php?title=MediaWiki_Diskussion:Spam-blacklist&oldid=136131974#www.denkmalschutz.de_.22.26cHash.3D.5B0-9a-f.5D.2B.22_entfernen]
+	test_and_replace($text, qr/http:\/\/www.denkmalschutz.de\/($_re_url_class+?)\K&cHash=[0-9a-f]+/m, '""', $verb_lvl);
+
+	# === tests ===
+	#test_and_replace($text, qr/seth sagt: hallo camelbot!/m, '"camelbot sagt: hallo seth!"', $verb_lvl);
 }
 
 sub delete_wiki_page{
@@ -492,8 +504,7 @@ sub link_replacement{
 	my $old_page_0 = {};           # list of edited pages in ns==0
 	my $old_page_1 = {};           # list of edited pages in ns!=0
 	# some regexp vars should make source more readable 
-	my $re_url_class = qr/[^\][<>"'\x00-\x20\x7F)]|\)(?!\s)/;
-	my $re_url = $re_prot_part.$re_url_part.$re_url_class;
+	my $re_url = $re_prot_part.$re_url_part.$_re_url_class;
 	my $re_descr_class = qr/[^\]\x00-\x08\x0a-\x1F]/;
 	my $re_ref_tag_name = qr/<ref [^>]*name\s*=\s*['"]?([^>]*?)['"]?>/;
 	my $re_ref_inner_part = qr/(?s:(?!<ref)(?!<\/ref>).)+?$re_url_part.*?<\/ref>/;
@@ -587,11 +598,11 @@ sub link_replacement{
 			if(defined $replacement){
 				#test_and_replace(
 				#	\$text, 
-				#	qr/$re_prot_part$re_url_part(?<trail>$re_url_class*)(?:(?<posturl>.*?)$re_deadlink)?/m, 
+				#	qr/$re_prot_part$re_url_part(?<trail>$_re_url_class*)(?:(?<posturl>.*?)$re_deadlink)?/m, 
 				#	'"'.$replacement.'$+{trail}".($+{posturl} // "")', 
 				#	$verb_lvl
 				#);
-				$text =~ s/(?<preurl>.*?)\K(?<url>$re_prot_part$re_url_part(?<trail>$re_url_class*+))(?=(?<posturl>.*?$re_deadlink|.*))
+				$text =~ s/(?<preurl>.*?)\K(?<url>$re_prot_part$re_url_part(?<trail>$_re_url_class*+))(?=(?<posturl>.*?$re_deadlink|.*))
 					/test_and_replace_with_funcref($replacement, $+{preurl}, $+{'url'}, $+{'posturl'}, $verb_lvl)/xmge;
 			}elsif($options{'delete_link'}){
 				if($options{'refs'}){
@@ -711,24 +722,24 @@ sub link_replacement{
 
 			#cleanup_wiki_page(\$text, $verb_lvl);
 			if(defined $replacement){
-				$text =~ s/(?<preurl>.*?)\K(?<url>$re_prot_part$re_url_part(?<trail>$re_url_class*+))(?=(?<posturl>.*?$re_deadlink|.*))
+				$text =~ s/(?<preurl>.*?)\K(?<url>$re_prot_part$re_url_part(?<trail>$_re_url_class*+))(?=(?<posturl>.*?$re_deadlink|.*))
 					/test_and_replace_with_funcref($replacement, $+{preurl}, $+{'url'}, $+{'posturl'}, $verb_lvl)/xmge;
 			}elsif($options{'delete_link'}){
 				if($options{'nonrefs'}){
 					# [link]
-					test_and_replace(\$text, qr/\[$re_prot_part($re_url_part$re_url_class*?)\]/, '$1', $verb_lvl);
+					test_and_replace(\$text, qr/\[$re_prot_part($re_url_part$_re_url_class*?)\]/, '$1', $verb_lvl);
 					# [link descr]
 					test_and_replace(\$text, qr/(?<!<nowiki>)(\[$re_url*\s*$re_descr_class*\])/, '"<nowiki>".$1."<\/nowiki>"', $verb_lvl);
 					# plain_link or word:plainlink
-					test_and_replace(\$text, qr/(?<!$re_url_class)(?<!<nowiki>\[)([a-zA-Z0-9]*:|)$re_prot_part($re_url_part$re_url_class*)/, '$1.$2', $verb_lvl);
+					test_and_replace(\$text, qr/(?<!$_re_url_class)(?<!<nowiki>\[)([a-zA-Z0-9]*:|)$re_prot_part($re_url_part$_re_url_class*)/, '$1.$2', $verb_lvl);
 					# ==plain_link==
-					test_and_replace(\$text, qr/^(=+) *$re_prot_part($re_url_part$re_url_class*) *\1 */m, '$1." ".$2." ".$1', $verb_lvl);
+					test_and_replace(\$text, qr/^(=+) *$re_prot_part($re_url_part$_re_url_class*) *\1 */m, '$1." ".$2." ".$1', $verb_lvl);
 					# :*plain_link
-					test_and_replace(\$text, qr/^([:\s*]*)$re_prot_part($re_url_part$re_url_class*)/m, '$1.$2', $verb_lvl);
+					test_and_replace(\$text, qr/^([:\s*]*)$re_prot_part($re_url_part$_re_url_class*)/m, '$1.$2', $verb_lvl);
 					# (plain_link)
-					test_and_replace(\$text, qr/([()]\s*)$re_prot_part($re_url_part$re_url_class*)(\s*\)|\s)/, '$1.$2.$3', $verb_lvl);
+					test_and_replace(\$text, qr/([()]\s*)$re_prot_part($re_url_part$_re_url_class*)(\s*\)|\s)/, '$1.$2.$3', $verb_lvl);
 #					# {|plain_link|}
-#					test_and_replace(\$text, qr/([|{]\s*)$re_prot_part($re_url_part$re_url_class*)(\s*[|}])/, '$1.$2.$3', $verb_lvl);
+#					test_and_replace(\$text, qr/([|{]\s*)$re_prot_part($re_url_part$_re_url_class*)(\s*[|}])/, '$1.$2.$3', $verb_lvl);
 				}
 				# not good for large pages:
 				print " not resolved: $1\n" if $text=~/^(.*(?<!<nowiki>)(?<!<nowiki>\[)$re_prot_part$re_url_part.*)/m;
@@ -780,6 +791,7 @@ sub login{
 	my $cookie = '.mediawiki-bot-'.$wiki_user_norm.'-cookies';
 	# if wiki user password is not defined, search typical password places or let user type in wiki user password
 	if(not defined $wiki_password){
+		# /bot/ needed for toolserver (for historical reasons)
 		my $pwfile = [".password", "$ENV{HOME}/.password", "$ENV{HOME}/bot/.password"];
 		for(@$pwfile){
 			if(-e $_){
@@ -791,7 +803,8 @@ sub login{
 			}
 		}
 		unless(defined $wiki_password or
-				( -e $cookie and
+				(	# $wiki_user =~/^(?:CamelBot)$/ and 
+					-e $cookie and
 					not ($options{'delete'} or $options{'upload'})
 				)
 		){
@@ -813,6 +826,7 @@ sub login{
 
 	my %address_params = (
 		'protocol' => 'https',
+		# wiki dependent
 		'host'     => 'de.wikipedia.org',
 		'path'     => 'w',
 		#'host'     => 'wiki.selfhtml.org',
@@ -1076,6 +1090,7 @@ sub save_wiki_page{
 	my $options = shift;
 	if($$text ne $$orig_text){
 		my $user_answer_diff;
+		# comment the following line if no X/tk is available.
 		$user_answer_diff = show_diff($text, $orig_text, $options) if defined $options->{'showdiff'} and $options->{'showdiff'}>0;
 		if(not defined $options->{'simulation'} or !$options->{'simulation'}){
 			my $user_input;
@@ -1172,14 +1187,16 @@ sub test_and_replace{
 	my $verb_lvl = shift // 0;
 	if($verb_lvl>0){
 		my $strpos = 0;
-		while(substr($$text, $strpos) =~/$regexp_s/mp){ # if searched pattern occurs
+		# comment 2014-12-03, seth: in the following pattern p-modifier should not be added as postfix,
+		# because ${^MATCH} etc. won't be available. I don't know the reason for that.
+		while(substr($$text, $strpos) =~ /(?p:$regexp_s)/m){ # if searched pattern occurs
 			my $len_prematch = length(${^PREMATCH});
-			$strpos += length(${^PREMATCH})+length(${^MATCH});
+			$strpos += length(${^PREMATCH}) + length(${^MATCH});
 			my $prematch = ${^PREMATCH};
 			my $match = ${^MATCH};
 			my $link = ${^PREMATCH}.${^MATCH};      # save matched text
 			print "   ".$match."\n";                # print old text
-			$link =~s/$regexp_s/eval($regexp_r)/me; # replace
+			$link =~s/$regexp_s/$regexp_r/mee; # replace
 			$link = substr($link, $len_prematch);
 			print " ->".$link."\n";                 # print replaced text
 			#if($link=~/^https?:\/\// or $match=~/^https?:\/\//){
@@ -1191,7 +1208,7 @@ sub test_and_replace{
 			}
 		}
 	}
-	$$text=~s/$regexp_s/eval($regexp_r)/gme; # now run on real string
+	$$text=~s/$regexp_s/$regexp_r/gmee; # now run on real string
 }
 
 sub text_replacement{
@@ -1409,13 +1426,22 @@ sub parse_rc{
 	my $msg = shift;
 	my $verbose = shift;
 	my %parsed_msg;
-	if($msg=~/^\cC14\[\[\cC07([^\]]+)\cC14]]\cC4 ([a-z0-9_-]+|[!NMB]*)\cC10 \cC02([^\cC]*)\cC \cC5\*\cC \cC03([^\cC]*)\cC \cC5\*\cC (\(\cB?[+-]\d+\cB?\)|) \cC10(.*[^\cC]|)\cC?\z/){
-		$parsed_msg{page} = $1;
-		$parsed_msg{flags} = $2;
-		$parsed_msg{url} = $3;
-		$parsed_msg{user} = $4;
-		$parsed_msg{diffbytes} = $5;
-		$parsed_msg{summary} = $6;
+	if($msg=~/^\cC14
+		\[\[\cC07([^\]]+)\cC14]]\cC4\x20   # page
+		([a-z0-9_-]+|[!NMB]*)\cC10\x20     # flags
+		\cC02([^\cC]*)\cC\x20\cC5\*\cC\x20 # url
+		\cC03([^\cC]*)\cC\x20\cC5\*\cC\x20 # user
+		(\(\cB?[+-]\d+\cB?\)|)\x20         # diffbytes
+		\cC10(.*[^\cC]|)\cC?\z/x){         # summary
+		$parsed_msg{'page'} = $1;
+		$parsed_msg{'flags'} = $2;
+		$parsed_msg{'url'} = $3;
+		$parsed_msg{'user'} = $4;
+		$parsed_msg{'diffbytes'} = $5;
+		$parsed_msg{'summary'} = $6;
+		if($parsed_msg{'diffbytes'} =~ /^\(\cB?([+-]\d+)\cB?\)$/){
+			$parsed_msg{'diffbytes'} = $1;
+		}
 		print Data::Dumper->Dump([\%parsed_msg]) if $verbose>4;
 	}else{
 		print $msg."\n" if $verbose>1;
@@ -1629,11 +1655,52 @@ if($params->{'irc'}){
 	update_edit_filter_index($bot, $mw, \%options);
 	package CamelBot;
 	use base qw(Bot::BasicBot); # irc bot
+	$| = 1; # deactivate buffering, so flush all the time
 
 	my $edit_filter_name_re = qr/(?:Bearbeitung|Missbrauch)sfilter/;
+	my %pages; # rc pages to check
+	my $delay = 30*60; # seconds
+	my $start_ts = time; # only for debugging purposes
+	my $namespaces_re = join '|', grep {$_ ne ''} values {$bot->get_namespace_names()}; # get all namespaces except 0
+	$namespaces_re = qr/^$namespaces_re:/;
+
 	# bot help
 	sub help {
 		return 'i\'m just listening to recent changes in w:de and sometimes those changes trigger some of my functions. if you have any questions, please ask my master at https://de.wikipedia.org/wiki/user_talk:lustiger_seth.';
+	}
+
+	sub rc_hook{
+		my $rc_msg = shift;
+		$pages{$rc_msg->{'page'}} = time;
+		print 'irc: ', ($pages{$rc_msg->{'page'}}-$start_ts), ' (#pages in stack: '.scalar(keys %pages).') ', $rc_msg->{'page'}, ', editor = ', $rc_msg->{'user'}, "\n" if $options{'verbose'}>1;
+		my @updList;
+		# the $now variable should be defined outside of following loop, because 
+		# otherwise this could cause parallel (redundant?) loops for the same page. maybe
+		# time should be even more precise (Time::HiRes) to prevent from that effect.
+		my $now = time;
+		while(my ($title, $timestamp) = each %pages){
+			if($timestamp + $delay < $now){
+				delete $pages{$title};
+				print ' old page: ', $title, "\n"; # if $options{'verbose'}>1;
+				push @updList, $title;
+			}
+		}
+		my @time_stack = ();           # needed for edit/min constraint
+		my $user_answer = '';          # user answer initially is "no"
+		for my $page(@updList){
+			my $text = $bot->get_text($page);
+			if(defined $text and ::is_allowed(\$text, $options{'username'})){
+				my $text_bak = $text;
+				::cleanup_wiki_page(\$text, $options{'verbose'});
+				if($text_bak ne $text){
+					::time_management(\@time_stack, $options{'max_edits_per_min'}, $options{'verbose'});
+					#print "* save $page_\n";
+					::save_wiki_page($bot, $page, 'kleinere korrekturen. feedback bitte auf [[user talk:lustiger_seth]] melden.', \$text, \$text_bak, \@time_stack, \$user_answer, \%options);
+				}
+			}else{
+				print "notice: could not fetch page '$page'. maybe deleted already\n" if $options{'verbose'}>1;
+			}
+		}
 	}
 
 	# bot handler: if somebody said something
@@ -1657,9 +1724,15 @@ if($params->{'irc'}){
 			if($message->{who} =~/^rc-\w+$/){
 				# parse rc message
 				my $rc_msg = ::parse_rc($message->{body}, $options{'verbose'});
+				if(# $rc_msg->{'user'} eq 'Lustiger seth' or 
+					$rc_msg->{'user'} ne $options{'username'} and 
+					(index($rc_msg->{'page'}, ':') == -1 or $rc_msg->{'page'} !~ /$namespaces_re/)
+				){
+					rc_hook($rc_msg);
+				}
 				#print ::Dumper $rc_msg;
-				# edit filter
-				if($rc_msg->{page} =~ /^Wikipedia:$edit_filter_name_re\/\d+$/){
+				# update edit filter index
+				if($rc_msg->{'page'} =~ /^Wikipedia:$edit_filter_name_re\/\d+$/){
 					::update_edit_filter_index($bot, $mw, \%options);
 				}
 			}
@@ -1674,7 +1747,7 @@ if($params->{'irc'}){
 		username => $username,
 		name => $username,
 		alias => 'rc',
-		#	no_run => 1,
+		# no_run => 1,
 	);
 	$bot_rc->run();
 	#use POE;
