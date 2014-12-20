@@ -24,7 +24,7 @@ use POSIX qw/strftime/;
 use Time::Local; # timegm
 
 # global vars
-$main::VERSION = '0.65.20141220';
+$main::VERSION = '0.66.20141221';
 my $_re_url_class = qr/[^\]\[<>"'\x00-\x20\x7F)]|\)(?!\s)/;
 # comment 2014-12-03, seth: char class $_re_url_class contained | char in function cleanup_wiki_page; now deleted
 
@@ -174,7 +174,7 @@ sub cat_add{
 		my $page_utf8 = $page;
 		utf8::decode($page_utf8);
 		my $text = $bot->get_text($page_utf8);
-		next unless is_allowed(\$text, $options{'username'});
+		next unless is_allowed(\$text, $options{'username'}, $page);
 		# page is already in cat
 		next if $text =~ /\[\[[Cc]ategory:(?i:\Q$cat_first\E)\Q$cat_tail\E\]\]/;
 		print "add page to cat.\n" if $options{'verbose'}>0;
@@ -213,7 +213,7 @@ sub cat_rename{
 	for my $page (@pages){
 		print "page = $page\n" if $options{'verbose'}>0;
 		my $text = $bot->get_text($page);
-		next unless is_allowed(\$text, $options{'username'});
+		next unless is_allowed(\$text, $options{'username'}, $page);
 		my $text_bak = $text;
 		$text =~ s/(\[\[[cC]ategory:(?i:$old_cat_first)$old_cat_tail\]\])/[[category:$new_cat]]/g;
 		print " changing: $1 -> [[category:$new_cat]]\n" if $text ne $text_bak and $options{'verbose'}>0;
@@ -469,6 +469,7 @@ sub get_pages_by_prefix{
 sub is_allowed{
 	my $textref = shift;
 	my $user = shift;
+	my $page = shift // 'unknown';
 	my $allowed = 1;
 	if($$textref =~ /{{[nN]obots}}|
 		[bB]ots\s*+\|\s*+(?:
@@ -489,7 +490,7 @@ sub is_allowed{
 			$allowed = 0;
 		}
 	}
-	print "bot is not allowed here.\n" if $allowed==0;
+	print "bot is not allowed on page '$page' (".localtime().").\n" if $allowed==0;
 	return $allowed;
 }
 
@@ -608,7 +609,7 @@ sub link_replacement{
 			#next unless $hash->{'url'}=~/$re_prot_part$re_url_part/;
 			print "$edit_counter: page= $page, url= ".$hash->{'url'}."\n";
 			my $text = $bot->get_text($page);
-			next unless is_allowed(\$text, $options{'username'});
+			next unless is_allowed(\$text, $options{'username'}, $page);
 			my $text_bak = $text;
 			cleanup_wiki_page(\$text, $verb_lvl);
 			if(defined $replacement){
@@ -733,7 +734,7 @@ sub link_replacement{
 			}
 			print "$edit_counter: page= $page, url= ".$hash->{'url'}."\n";
 			my $text = $bot->get_text($page);
-			next unless is_allowed(\$text, $options{'username'});
+			next unless is_allowed(\$text, $options{'username'}, $page);
 			my $text_bak = $text;
 
 			#cleanup_wiki_page(\$text, $verb_lvl);
@@ -1051,7 +1052,7 @@ sub rebuild_table{
 	}elsif($text eq ''){
 		print "notice: page $page is empty.\n" if $options{'verbose'}>0;
 	}else{
-		return unless is_allowed(\$text, $options{'username'});
+		return unless is_allowed(\$text, $options{'username'}, $page);
 	}
 	my $text_bak = $text;
 	# convert table to wikitext string
@@ -1119,7 +1120,7 @@ sub save_wiki_page{
 				$$user_answer = 'y';
 				my $page = $page_utf8;
 				utf8::encode($page);
-				print "  saving page [[$page]] ...\n" if $options->{'verbose'}>0;
+				print "  saving page [[$page]] ... (".localtime().")\n" if $options->{'verbose'}>0;
 				push @$time_stack, time;
 				$bot->edit({
 						is_minor => $options->{'minor'},
@@ -1253,7 +1254,7 @@ sub text_replacement{
 				print "error: page content not defined\n";
 				next;
 			}
-			if(not is_allowed(\$text, $botname)){
+			if(not is_allowed(\$text, $botname), $page){
 				print "  not allowed\n" if $verb_lvl>1;
 				next;
 			}
@@ -1713,7 +1714,7 @@ if($params->{'irc'}){
 		my $user_answer = '';          # user answer initially is "no"
 		for my $page(@updList){
 			my $text = $bot->get_text($page);
-			if(defined $text and ::is_allowed(\$text, $options{'username'})){
+			if(defined $text and ::is_allowed(\$text, $options{'username'}, $page)){
 				my $text_bak = $text;
 				::cleanup_wiki_page(\$text, $options{'verbose'});
 				if($text_bak ne $text){
