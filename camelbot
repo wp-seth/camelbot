@@ -24,7 +24,7 @@ use POSIX qw/strftime/;
 use Time::Local; # timegm
 
 # global vars
-$main::VERSION = '0.66.20141221';
+$main::VERSION = '0.67.20141222';
 my $_re_url_class = qr/[^\]\[<>"'\x00-\x20\x7F)]|\)(?!\s)/;
 # comment 2014-12-03, seth: char class $_re_url_class contained | char in function cleanup_wiki_page; now deleted
 
@@ -240,7 +240,7 @@ sub cleanup_wiki_page{
 
 	# === technically superfluous external links ===
 	test_and_replace($text, 
-		qr/\[{1,2}(https?:\/\/de\.wikipedia\.org\/wiki\/[^ ]++) ([^\]]+)\]{1,2}/m, 
+		qr/\[{1,2}(https?:\/\/de\.wikipedia\.org\/wiki\/[^\] ]++) ([^\]]+)\]{1,2}/m, 
 		'"[[".url2articlename($1).(url2articlename($1) eq $2 ? "" : "|$2")."]]"', $verb_lvl);
 
 	# === specific domains ===
@@ -1394,6 +1394,8 @@ sub url2articlename{
 	$url =~ /^(?:https?:\/\/de\.wikipedia\.org\/wiki\/)?(.*)/;
 	my $article_name = uri_unescape($1);
 	$article_name =~s/_/ /g;
+	# 2014-12-23, seth: "https://de.wikipedia.org/wiki/K%C3%B6nigliche_und_barmherzige_Vereinigung_der_Ordens-_und_Medaillentr%C3%A4ger_von_Belgien" became: "KÃ¶nigliche und barmherzige Vereinigung der Ordens- und MedaillentrÃ¤ger von Belgien"
+	utf8::decode($article_name);
 	return $article_name;
 }
 
