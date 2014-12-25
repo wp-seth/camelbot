@@ -24,7 +24,7 @@ use POSIX qw/strftime/;
 use Time::Local; # timegm
 
 # global vars
-$main::VERSION = '0.67.20141222';
+$main::VERSION = '0.68.20141225';
 my $_re_url_class = qr/[^\]\[<>"'\x00-\x20\x7F)]|\)(?!\s)/;
 # comment 2014-12-03, seth: char class $_re_url_class contained | char in function cleanup_wiki_page; now deleted
 
@@ -1396,6 +1396,7 @@ sub url2articlename{
 	$article_name =~s/_/ /g;
 	# 2014-12-23, seth: "https://de.wikipedia.org/wiki/K%C3%B6nigliche_und_barmherzige_Vereinigung_der_Ordens-_und_Medaillentr%C3%A4ger_von_Belgien" became: "KÃ¶nigliche und barmherzige Vereinigung der Ordens- und MedaillentrÃ¤ger von Belgien"
 	utf8::decode($article_name);
+	$article_name =~ s/^(?=Datei:|Bild:|Image:|File:)/:/;
 	return $article_name;
 }
 
