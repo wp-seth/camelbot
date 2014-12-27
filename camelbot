@@ -223,7 +223,8 @@ sub cat_rename{
 }
 
 sub cleanup_wiki_page{
-	my $text = shift; # ref to string
+	my $text     = shift; # ref to string
+	my $page     = shift;
 	my $verb_lvl = shift // 1;         # level of verbosity
 
 	# == link fixes ==
@@ -239,9 +240,12 @@ sub cleanup_wiki_page{
 	#}
 
 	# === technically superfluous external links ===
-	test_and_replace($text, 
-		qr/\[{1,2}(https?:\/\/de\.wikipedia\.org\/wiki\/[^\] ]++) ([^\]]+)\]{1,2}/m, 
-		'"[[".url2articlename($1).(url2articlename($1) eq $2 ? "" : "|$2")."]]"', $verb_lvl);
+	if($page ne 'Hypertext Transfer Protocol Secure'){
+		test_and_replace($text, 
+			qr/\[{1,2}(https?:\/\/de\.wikipedia\.org\/wiki\/[^\] ]++) ([^\]]+)\]{1,2}/m, 
+			'"[[".url2articlename($1).(url2articlename($1) eq $2 ? "" : "|$2")."]]"', 
+			$verb_lvl);
+	}
 
 	# === specific domains ===
 	# see [https://de.wikipedia.org/w/index.php?title=MediaWiki_Diskussion:Spam-blacklist&oldid=136131974#www.denkmalschutz.de_.22.26cHash.3D.5B0-9a-f.5D.2B.22_entfernen]
@@ -611,7 +615,7 @@ sub link_replacement{
 			my $text = $bot->get_text($page);
 			next unless is_allowed(\$text, $options{'username'}, $page);
 			my $text_bak = $text;
-			cleanup_wiki_page(\$text, $verb_lvl);
+			cleanup_wiki_page(\$text, $page, $verb_lvl);
 			if(defined $replacement){
 				#test_and_replace(
 				#	\$text, 
@@ -737,7 +741,7 @@ sub link_replacement{
 			next unless is_allowed(\$text, $options{'username'}, $page);
 			my $text_bak = $text;
 
-			#cleanup_wiki_page(\$text, $verb_lvl);
+			#cleanup_wiki_page(\$text, $page, $verb_lvl);
 			if(defined $replacement){
 				$text =~ s/(?<preurl>.*?)\K(?<url>$re_prot_part$re_url_part(?<trail>$_re_url_class*+))(?=(?<posturl>.*?$re_deadlink|.*))
 					/test_and_replace_with_funcref($replacement, $+{preurl}, $+{'url'}, $+{'posturl'}, $verb_lvl)/xmge;
@@ -1259,7 +1263,7 @@ sub text_replacement{
 				next;
 			}
 			my $text_bak = $text;
-			cleanup_wiki_page(\$text, $verb_lvl);
+			cleanup_wiki_page(\$text, $page, $verb_lvl);
 			my $found = 0;
 			for(my $i=0; $i<@$patterns; ++$i){
 				if($text=~/$patterns->[$i]/){
@@ -1719,7 +1723,7 @@ if($params->{'irc'}){
 			my $text = $bot->get_text($page);
 			if(defined $text and ::is_allowed(\$text, $options{'username'}, $page)){
 				my $text_bak = $text;
-				::cleanup_wiki_page(\$text, $options{'verbose'});
+				::cleanup_wiki_page(\$text, $page, $options{'verbose'});
 				if($text_bak ne $text){
 					::time_management(\@time_stack, $options{'max_edits_per_min'}, $options{'verbose'});
 					#print "* save $page_\n";
