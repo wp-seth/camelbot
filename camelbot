@@ -24,7 +24,7 @@ use URI::Escape;           # uri_unescape
 use WWW::Mechanize;        # big web browser
 
 # global vars
-$main::VERSION = '0.71.20141229';
+$main::VERSION = '0.72.20141231';
 my $_re_url_class = qr/[^\]\[<>"'\x00-\x20\x7F)]|\)(?!\s)/;
 my $_re_ASIN = qr/\bASIN[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/;
 # comment 2014-12-03, seth: char class $_re_url_class contained | char in function cleanup_wiki_page; now deleted
@@ -153,17 +153,20 @@ my $_re_ASIN = qr/\bASIN[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/;
 # sub get_http_status
 # 	return http status code of a given url
 #
+# sub msg
+# 	write message to STDOUT
+#
 # sub num_unique_elem
 # 	return number of elements, without counting double entries
 #
 # sub parse_rc
 # 	parse recent changes told by bot via irc. return ref to hash with content.
 #
-# sub syntaxCheck
-# 	parse cli params
-#
 # sub read_file_binary
 # 	read a file binary
+#
+# sub syntaxCheck
+# 	parse cli params
 #
 # sub show_diff
 # 	shows a diff via Tk
@@ -187,16 +190,16 @@ sub cat_add{
 	$options{'verbose'}           = $globaloptions->{'verbose'}           //  1; # level of verbosity
 	my $cat_first = lc substr($cat, 0, 1);
 	my $cat_tail = substr($cat, 1);
-	print "start cat adding...\n" if $options{'verbose'}>0;
+	msg("start cat adding...") if $options{'verbose'} > 0;
 	for my $page (@$pages){
-		print "page = $page\n" if $options{'verbose'}>0;
+		msg("page = $page") if $options{'verbose'} > 0;
 		my $page_utf8 = $page;
 		utf8::decode($page_utf8);
 		my $text = $bot->get_text($page_utf8);
 		next unless is_allowed(\$text, $options{'username'}, $page);
 		# page is already in cat
 		next if $text =~ /\[\[[Cc]ategory:(?i:\Q$cat_first\E)\Q$cat_tail\E\]\]/;
-		print "add page to cat.\n" if $options{'verbose'}>0;
+		msg("add page to cat.") if $options{'verbose'} > 0;
 		# add page to cat
 		my $text_bak = $text;
 		if($text =~ /\[\[[cC]ategory:/){
@@ -226,16 +229,16 @@ sub cat_rename{
 	$options{'verbose'}           = $globaloptions->{'verbose'}           //  1; # level of verbosity
 	my $old_cat_first = lc substr($old_cat, 0, 1);
 	my $old_cat_tail = substr($old_cat, 1);
-	print "start cat renaming...\n" if $options{'verbose'}>0;
+	msg("start cat renaming...") if $options{'verbose'} > 0;
 	my @pages = $bot->get_pages_in_category("Category:$old_cat");
-	print 'found '.@pages." pages:\n" if $options{'verbose'}>0;
+	msg('found '.@pages." pages:") if $options{'verbose'} > 0;
 	for my $page (@pages){
-		print "page = $page\n" if $options{'verbose'}>0;
+		msg("page = $page") if $options{'verbose'} > 0;
 		my $text = $bot->get_text($page);
 		next unless is_allowed(\$text, $options{'username'}, $page);
 		my $text_bak = $text;
 		$text =~ s/(\[\[[cC]ategory:(?i:$old_cat_first)$old_cat_tail\]\])/[[category:$new_cat]]/g;
-		print " changing: $1 -> [[category:$new_cat]]\n" if $text ne $text_bak and $options{'verbose'}>0;
+		msg(" changing: $1 -> [[category:$new_cat]]") if $text ne $text_bak and $options{'verbose'} > 0;
 		time_management(\@time_stack, $options{'max_edits_per_min'}, $options{'verbose'});
 		save_wiki_page($bot, $page, $summary, \$text, \$text_bak, \@time_stack, \$user_answer, \%options);
 	}
@@ -261,7 +264,7 @@ sub cleanup_wiki_page{
 	# === technically superfluous external links ===
 	if($page ne 'Hypertext Transfer Protocol Secure'){
 		test_and_replace($text, 
-			qr/\[{1,2}(https?:\/\/de\.wikipedia\.org\/wiki\/[^\] #]++(?:#(?!mediaviewer)[^\] ]+)?) ([^\]]+)\]{1,2}/m, 
+			qr/\[{1,2}(https?:\/\/de\.wikipedia\.org\/wiki\/[^\]| #]++(?:#(?!mediaviewer)[^\]| ]+)?) ([^\]]+)\]{1,2}/m, 
 			'"[[".url2title($1).(url2title($1) eq $2 ? "" : "|$2")."]]"', 
 			$verb_lvl);
 	}
@@ -294,7 +297,7 @@ sub delete_wiki_page{
 		}
 		if((not defined $options->{'askuser'}) || !$options->{'askuser'} || $user_input=~/y(?:es)?/ || ($user_input eq '' && $$user_answer eq 'y')){
 			$$user_answer = 'y';
-			print "  deleting page [[$page]] ...\n" if $options->{'verbose'}>0;
+			msg("  deleting page [[$page]] ...") if $options->{'verbose'} > 0;
 			push @$time_stack, time;
 			$mw->edit({
 				'action' => 'delete',
@@ -320,7 +323,7 @@ sub download_css{
 	$mech->agent_alias('Linux Mozilla');
 	$mech->get($cssurl);
 	if($mech->status() != 200){
-		print '  error. download of css failed. status: '.$mech->status()."\n";
+		msg('download of css failed. status: '.$mech->status(), 'error');
 	}else{
 		my $css_content = $mech->content();
 		write_file($filename, $css_content);
@@ -335,23 +338,23 @@ sub download_files{
 	my $files_prefix  = shift // '';
 	my $verbose       = shift // 1;
 	for my $file(@$files){
-		print "getting '$file' from wiki\n" if $verbose > 1;
+		msg("getting '$file' from wiki") if $verbose > 1;
 		my $img_data = $bot->get_image("File:$file");
 		unless(defined $img_data){
-			print "error: could not read file '$file' from wiki\n";
+			msg("could not read file '$file' from wiki", 'error');
 			next;
 		}
 		$file = title2filename($file);
 		if(-e $file){
 			# unless($file ~~ $no_warn_files){ smartmatch operator is considered experimental as of 5.18 (seth, 2014-11-15)
 			unless(grep {$_ eq $file} @$no_warn_files){
-				print "warning: file '$file' exists already\n";
+				msg("file '$file' exists already", 'warning');
 				push @$no_warn_files, $file;
 			}
 			next;
 		};
 		push @$no_warn_files, $file;
-		print "writing file '$file'\n" if $verbose > 1;
+		msg("writing file '$file'") if $verbose > 1;
 		write_file($files_prefix.$file, {binmode => ':raw'}, \$img_data);
 	}
 	return 1;
@@ -364,14 +367,14 @@ sub download_pages_by_prefix{
 	my @prefix_pages = grep {!$_->{'redirect'} and $_ = $_->{'title'}} $bot->prefixindex($prefix);
 	die "error: no pages found with prefix '$prefix}'.\n" if @prefix_pages==0;
 	my $page_texts = $bot->get_pages(\@prefix_pages);
-	if($verbose>0){
-		map {print "getting '$_'\n"} sort keys %$page_texts;
+	if($verbose > 0){
+		map {msg("getting '$_'")} sort keys %$page_texts;
 	}
 	my $no_warn_files = [];
 	my $files_prefix = '';
 	while(my ($title, $text) = each %$page_texts){
 		$title = title2filename($title).'.wikitext';
-		print "saving '$title'\n" if $verbose>1;
+		msg("saving '$title'") if $verbose > 1;
 		die "error: file '$title' exists already\n" if -e $title;
 		write_file($title, {binmode => ':utf8'}, $text);
 		my @images = $text=~/
@@ -405,7 +408,7 @@ sub get_user_contribs{
 	my $ucend   = $options->{'ucend'};
 	my $uclimit = $options->{'uclimit'};
 	my $user    = $options->{'username'} // $options->{'usernameprefix'};
-	print "searching for contributions of user: $user\n";
+	msg("searching for contributions of user: $user");
 	#my $ref = $bot->contributions($options->{'username'}, 0, undef);
 	my $mwapi = MediaWiki::API->new();
 	$mwapi->{config}->{api_url} = $options->{'api'};
@@ -428,7 +431,7 @@ sub get_user_contribs{
 	my $mw_options = {'max' => 1};
 	my %list_of_articles;
 	#while((keys %list_of_articles)<$uclimit and (defined $ucend and $ucstart gt $ucend or not defined $ucend)){
-		#print "ucstart = $ucstart, ucend = $ucend\n" if defined $ucstart and defined $ucend;
+		#msg("ucstart = $ucstart, ucend = $ucend") if defined $ucstart and defined $ucend;
 		my $tmp = $mwapi->api($query, $mw_options);
 		$ucstart = $tmp->{'query-continue'}->{'usercontribs'}->{'ucstart'};
 		$query->{'ucstart'} = $ucstart;
@@ -514,7 +517,7 @@ sub is_allowed{
 			$allowed = 0;
 		}
 	}
-	print "bot is not allowed on page '$page' (".localtime().").\n" if $allowed==0;
+	msg("bot is not allowed on page '$page'.") if $allowed==0;
 	return $allowed;
 }
 
@@ -558,12 +561,12 @@ sub link_replacement{
 	);
 
 	if($options{'articles'}){
-		print "starting linksearch in ns=0...\n";
+		msg("starting linksearch in ns=0...");
 		my @links;
 		if(defined $options{'searched_link'}){
 			@links = $bot->linksearch($options{'searched_link'}, 0, undef);
 		}elsif(defined $options{'user_contribs'}){
-			print 'searching for contributions of user:'.$options{'user_contribs'}->{'user'},"\n";
+			msg('searching for contributions of user:'.$options{'user_contribs'}->{'user'});
 			#my $ref = $bot->contributions($options{'user_contribs'}->{'user'}, 0, undef);
 			#$options{'ucstart'}  = '2011-03-18T00:00:00Z';
 			#$options{'ucend'}    = '2011-03-16T00:00:00Z';
@@ -587,7 +590,7 @@ sub link_replacement{
 			};
 			my $options = {'max' => 1};
 			while($ucstart gt $ucend){
-				print "ucstart = $ucstart, ucend = $ucend\n";
+				msg("ucstart = $ucstart, ucend = $ucend");
 				my $tmp = $mw->api($query, $options);
 				$ucstart = $tmp->{'query-continue'}->{'usercontribs'}->{'ucstart'};
 				$query->{'ucstart'} = $ucstart;
@@ -596,7 +599,7 @@ sub link_replacement{
 					for(@$usercontribs){
 						next if exists $old_page_0->{$_->{'title'}};
 						$old_page_0->{$_->{'title'}} = 1;
-						# print $_->{'title'},"\n";
+						# msg($_->{'title'});
 						my $diff = $bot->diff({
 							'revid' => $_->{'revid'},
 							'oldid' => 'prev',
@@ -617,8 +620,8 @@ sub link_replacement{
 				}
 			}
 		}
-		print 'results (found '.@links.' links in '.
-			num_unique_elem(map {$_->{'title'}} @links)." pages):\n";
+		msg('results (found '.@links.' links in '.
+			num_unique_elem(map {$_->{'title'}} @links)." pages):");
 		$results{'num_ns0_links'} = 0+@links;
 		#push @links, {'url' => 'scheissegal', 'title' => 'LyX'};
 		for my $hash (@links){
@@ -631,7 +634,7 @@ sub link_replacement{
 				last;
 			}
 			#next unless $hash->{'url'}=~/$re_prot_part$re_url_part/;
-			print "$edit_counter: page= $page, url= ".$hash->{'url'}."\n";
+			msg("$edit_counter: page= $page, url= ".$hash->{'url'});
 			my $text = $bot->get_text($page);
 			next unless is_allowed(\$text, $options{'username'}, $page);
 			my $text_bak = $text;
@@ -669,7 +672,7 @@ sub link_replacement{
 						# backrefs
 						if($text=~/$re_ref_tag_name$re_ref_inner_part/){
 							my $ref_name = $1;
-							print "debug: $ref_name\n";
+							msg($ref_name, 'debug');
 							test_and_replace(
 								\$text, 
 								qr/<(?i:ref) name\s*=\s*['"]?\s*$ref_name\s*['"]?\s*\/\s*>/, 
@@ -704,7 +707,7 @@ sub link_replacement{
 							$verb_lvl
 						);
 					}else{
-						print "warning: <references /> not deleted, because it would lead to an error.\n";
+						msg("<references /> not deleted, because it would lead to an error.", 'warning');
 					}
 				}
 				if($options{'nonrefs'}){
@@ -728,7 +731,7 @@ sub link_replacement{
 				if($text=~$weblinks_heading_re){
 					test_and_replace(\$text, $weblinks_heading_re, '"$2"', $verb_lvl);
 				}
-				print " not resolved: $1\n" if $text=~/(.*(?<!\|url=$re_prot_part)$re_url_part.*)/;
+				msg(" not resolved: $1") if $text=~/(.*(?<!\|url=$re_prot_part)$re_url_part.*)/;
 			}
 			time_management(\@time_stack, $options{'max_edits_per_min'}, $verb_lvl);
 			save_wiki_page($bot, $page, $options{'summary'}, \$text, \$text_bak, \@time_stack, \$user_answer, \%options);
@@ -739,13 +742,14 @@ sub link_replacement{
 	if($options{'nonarticles'}){
 		my $namespaces = {$bot->get_namespace_names()}; # get all namespaces
 		$namespaces = [grep {$_!=0} keys %$namespaces]; # delete namespace 0 from list
-		print "starting linksearch in ns!=0...\n";
+		msg("starting linksearch in ns!=0...");
 		my @links;
 		if(defined $options{'searched_link'}){
 			@links = $bot->linksearch($options{'searched_link'}, $namespaces, undef);
 		}elsif(defined $options{'user_contribs'}){
 		}
-		print 'results (found '.@links." links in ".num_unique_elem(map {$_->{'title'}} @links)." pages):\n";
+		msg('results (found '.@links." links in ".
+			num_unique_elem(map {$_->{'title'}} @links)." pages):");
 		$results{'num_ns!0_links'} = 0+@links;
 		for my $hash (@links){
 			my $page = $hash->{'title'};
@@ -756,7 +760,7 @@ sub link_replacement{
 			}elsif($edit_counter>$options{'max_edits'} && $options{'max_edits'}!=-1){
 				last;
 			}
-			print "$edit_counter: page= $page, url= ".$hash->{'url'}."\n";
+			msg("$edit_counter: page= $page, url= ".$hash->{'url'});
 			my $text = $bot->get_text($page);
 			next unless is_allowed(\$text, $options{'username'}, $page);
 			my $text_bak = $text;
@@ -783,11 +787,11 @@ sub link_replacement{
 #					test_and_replace(\$text, qr/([|{]\s*)$re_prot_part($re_url_part$_re_url_class*)(\s*[|}])/, '$1.$2.$3', $verb_lvl);
 				}
 				# not good for large pages:
-				print " not resolved: $1\n" if $text=~/^(.*(?<!<nowiki>)(?<!<nowiki>\[)$re_prot_part$re_url_part.*)/m;
+				msg(" not resolved: $1") if $text=~/^(.*(?<!<nowiki>)(?<!<nowiki>\[)$re_prot_part$re_url_part.*)/m;
 				# better:
 #				while($text=~/(^.*$re_prot_part$re_url_part.*)/gmo){
 #					my $temp = $1;
-#					print " not resolved: $temp\n" if $temp=~/(?<!<nowiki>)(?<!<nowiki>\[)$re_prot_part$re_url_part/;
+#					msg(" not resolved: $temp") if $temp=~/(?<!<nowiki>)(?<!<nowiki>\[)$re_prot_part$re_url_part/;
 #				}
 			}
 			time_management(\@time_stack, $options{'max_edits_per_min'}, $verb_lvl);
@@ -796,7 +800,8 @@ sub link_replacement{
 		$results{'num_ns!0_unique_links'} = $edit_counter-($results{'num_ns0_unique_links'} // 0);
 	}
 	if($options{'results'}){
-		print "\nresults:\n";
+		print "\n";
+		msg("results:");
 		print " found ".($results{'num_ns0_links'}+$results{'num_ns!0_links'})." links in ".(0+keys(%$old_page_0)+keys(%$old_page_1))." pages:\n";
 		if($options{'articles'} && $options{'nonarticles'}){
 			print "       ".$results{'num_ns0_links'}." links in ".$results{'num_ns0_unique_links'}." pages in ns==0\n";
@@ -821,11 +826,11 @@ sub login{
 	my $verbose = $options{'verbose'};
 	# if wiki user name is not defined, let user type in wiki user name
 	if(not defined $wiki_user){
-		print "enter wiki username:\n";
+		msg("enter wiki username:");
 		$wiki_user = <STDIN>;
 		chomp($wiki_user);
 	}
-	print "login user name is $wiki_user.\n" if $verbose>0;
+	msg("login user name is $wiki_user.") if $verbose > 0;
 	# cope with auto-normalization (bug in MediaWiki::Bot)
 	my $wiki_user_norm = ucfirst($wiki_user);
 	$wiki_user_norm =~y/_/ /;
@@ -836,7 +841,7 @@ sub login{
 		my $pwfile = [".password", "$ENV{HOME}/.password", "$ENV{HOME}/bot/.password"];
 		for(@$pwfile){
 			if(-e $_){
-				print "using standard password file $_\n" if $verbose>0;
+				msg("using standard password file $_") if $verbose > 0;
 				open(my $INFILE, '<', $_) or die $!;
 					chomp($wiki_password = <$INFILE>);
 				close($INFILE);
@@ -854,7 +859,7 @@ sub login{
 				print $pwfile->[$_].', ' for 0..($#$pwfile-1);
 				print $pwfile->[-1]."\n";
 			}
-			print "enter password (will not be echoed):\n";
+			msg("enter password (will not be echoed):");
 			ReadMode 'raw';
 			$wiki_password = ReadLine(0);
 			chomp($wiki_password);
@@ -874,7 +879,7 @@ sub login{
 		#'path'     => 'mediawiki',
 	);
 
-	print "logging in at $address_params{'host'}...\n" if $verbose>1;
+	msg("logging in at $address_params{'host'}...") if $verbose > 1;
 	my $bot = MediaWiki::Bot->new({
 		assert      => 'bot',
 		protocol    => $address_params{'protocol'},
@@ -903,11 +908,11 @@ sub login{
 		}) or die $mw->{'error'}->{'code'}.': '.$mw->{'error'}->{'details'};
 	}else{
 		unless(defined $bot){
-			print "error: maybe there's an expired cookie file. please delete '$cookie' and try again.\n" if -e $cookie;
+			msg("maybe there's an expired cookie file. please delete '$cookie' and try again.", 'error') if -e $cookie;
 			die("error: could not login.\n");
 		}
 	}
-	print "logged in...\n" if $verbose>1;
+	msg("logged in...") if $verbose > 1;
 	return ($bot, $mw, $api_url);
 }
 
@@ -970,10 +975,11 @@ sub notifier{
 	my $time_stack  = shift;
 	my $user_answer = shift;
 	my $options     = shift;
+	utf8::decode($page); # is this necessary?
 	my @hist = $bot->get_history($page, 2);
 	if(@hist==0){
 		if($options->{'verbose'} > 0){
-			print "notice in notifier: page '$page' doesn't seem to exist anymore.";
+			msg("page '$page' doesn't seem to exist anymore.", 'notice');
 		}
 		return 0;
 	}
@@ -1002,7 +1008,7 @@ sub notifier{
 				my $text_bak = $text;
 				my $heading = 'hinweis auf katalog-nummern von amazon';
 				if($text =~ /\Q$heading\E/){
-					print "notice in notifier: user '$user_to_inform' seems to be informed already.";
+					msg("user '$user_to_inform' seems to be informed already.", 'notice');
 				}else{
 					my $notice = $bot->get_text('user:CamelBot/notice-ASIN');
 					my $title = title2url_part($page);
@@ -1019,7 +1025,7 @@ sub notifier{
 			}
 		}
 	}else{
-		print "notice in notifier: could not fetch page '$page'. maybe deleted already\n" if $options->{'verbose'}>1;
+		msg("could not fetch page '$page'. maybe deleted already", 'notice') if $options->{'verbose'} > 1;
 	}
 	return 1;
 }
@@ -1131,10 +1137,10 @@ sub rebuild_table{
 	my @time_stack = ();           # needed for edit/min constraint
 	my $text = $bot->get_text($page);
 	if(not defined $text){
-		print "notice: page $page does not exist.\n" if $options{'verbose'}>0;
+		msg("page $page does not exist.", 'notice') if $options{'verbose'} > 0;
 		$text = '';
 	}elsif($text eq ''){
-		print "notice: page $page is empty.\n" if $options{'verbose'}>0;
+		msg("page $page is empty.", 'notice') if $options{'verbose'} > 0;
 	}else{
 		return unless is_allowed(\$text, $options{'username'}, $page);
 	}
@@ -1175,7 +1181,7 @@ sub rebuild_table{
 			}
 		}
 	}
-	print $text if $options{'simulation'};
+	msg($text) if $options{'simulation'};
 	time_management(\@time_stack, $options{'max_edits_per_min'}, $options{'verbose'});
 	save_wiki_page($bot, $page, $summary, \$text, \$text_bak, \@time_stack, \$user_answer, \%options);
 }
@@ -1204,12 +1210,13 @@ sub save_wiki_page{
 				$$user_answer = 'y';
 				my $page = $page_utf8;
 				utf8::encode($page);
-				print "  saving page [[$page]] ... (".localtime().")\n" if $options->{'verbose'}>0;
+				msg("saving page [[$page]] ... ") if $options->{'verbose'} > 0;
 				push @$time_stack, time;
 				$bot->edit({
 						is_minor => $options->{'minor'},
 						page     => $page_utf8,
 						text     => $$text,
+						bot      => 1,
 						summary  => "Bot: $summary",
 				});
 			}else{
@@ -1280,7 +1287,7 @@ sub test_and_replace_with_funcref{
 	# check http status; avoid change, if target not reachable
 	if($new_url=~/^https?:\/\//){
 		my $response_code = get_http_status($new_url);
-		print '  status: '.$response_code."\n" if $verbose > 0;
+		msg('  status: '.$response_code) if $verbose > 0;
 		$new_url = $old_url if $response_code != 200;
 	}
 	return $new_url.$correction;
@@ -1301,15 +1308,15 @@ sub test_and_replace{
 			my $prematch = ${^PREMATCH};
 			my $match = ${^MATCH};
 			my $link = ${^PREMATCH}.${^MATCH};      # save matched text
-			print "   ".$match."\n";                # print old text
-			$link =~s/$regexp_s/$regexp_r/mee; # replace
+			msg("   ".$match);                      # print old text
+			$link =~s/$regexp_s/$regexp_r/mee;      # replace
 			$link = substr($link, $len_prematch);
-			print " ->".$link."\n";                 # print replaced text
+			msg(" ->".$link);                       # print replaced text
 			#if($link=~/^https?:\/\// or $match=~/^https?:\/\//){
 			if($link=~/^https?:\/\//){
 				my $url = ($link=~/^https?:\/\//) ? $link : $match;
 				my $response_code = get_http_status($url);
-				print '  status: '.$response_code."\n";
+				msg('  status: '.$response_code);
 				return if $response_code != 200;
 			}
 		}
@@ -1326,7 +1333,7 @@ sub text_replacement{
 	my $pages    = $globaloptions->{'pages'};        # pages to search
 	my $patterns = $globaloptions->{'pattern'};      # patterns to search s/X//
 	my $repls    = $globaloptions->{'replacement'};  # replacing texts s//X/e
-	print "loop over pages and replace text\n" if $verb_lvl>0;
+	msg("loop over pages and replace text") if $verb_lvl > 0;
 	my @time_stack = ();                             # needed for edit/min constraint
 	my $user_answer = '';                            # user answer initially is "no"
 	my $edit_counter = -1;
@@ -1337,14 +1344,14 @@ sub text_replacement{
 			}elsif($edit_counter>=$options{'max_edits'} and $options{'max_edits'}!=-1){
 				last;
 			}
-			print "$edit_counter: page= $page\n" if $verb_lvl>0;
+			msg("$edit_counter: page = '$page'") if $verb_lvl > 0;
 			my $text = $bot->get_text($page);
 			unless(defined $text){
-				print "error: page content not defined\n";
+				msg("page content not defined", 'error');
 				next;
 			}
-			if(not is_allowed(\$text, $botname), $page){
-				print "  not allowed\n" if $verb_lvl>1;
+			if(not is_allowed(\$text, $botname, $page)){
+				msg("  not allowed") if $verb_lvl > 1;
 				next;
 			}
 			my $text_bak = $text;
@@ -1356,7 +1363,7 @@ sub text_replacement{
 					++$found;
 				}
 			}
-			print "  $found replacements\n" if $verb_lvl>1;
+			msg("  $found replacements") if $verb_lvl > 1;
 			time_management(\@time_stack, $options{'max_edits_per_min'}, $verb_lvl);
 			save_wiki_page($bot, $page, $options{'summary'}, \$text, \$text_bak, \@time_stack, \$user_answer, \%options);
 		}
@@ -1370,7 +1377,7 @@ sub time_management{
 	while($max_edits_per_min!=-1 && @$time_stack>=$max_edits_per_min){
 		my $tmp_time = time-$time_stack->[0];
 		if($tmp_time<60){
-			print '  ...waiting '.(60-$tmp_time)." seconds\n" if $verbose>0;
+			msg('  ...waiting '.(60-$tmp_time)." seconds") if $verbose > 0;
 			sleep(60-$tmp_time);
 		}
 		shift @$time_stack;
@@ -1421,7 +1428,7 @@ sub update_edit_filter_index{
 		'body' => [['Regel', "letzte Seiten\xe4nderung", 'Thread', 'letzter Autor']],
 	}];
 	for my $page(@$pages){
-		#print " $page->{'revisions'}->[0]->{'timestamp'}: $page->{title}\n" if $options->{'verbose'}>1;
+		#msg(" $page->{'revisions'}->[0]->{'timestamp'}: $page->{title}") if $options->{'verbose'} > 1;
 		my $npost = newest_post_info($page->{'revisions'}->[0]->{'*'});
 		next unless defined $npost->{'thread'};
 		++$i;
@@ -1500,15 +1507,15 @@ sub upload_file{
 	my $options = shift;
 	my $data = read_file_binary($filename_src);
 	# check, whether file exists already. If so, compare. don't upload, if same.
-	print " downloading file if existant\n" if $options->{'verbose'}>1;
+	msg(" downloading file if existant") if $options->{'verbose'} > 1;
 	my $oldfile = $mw->download({'title' => 'File:'.$filename_dest});
 	if(not defined $oldfile or $mw->{error}->{code}!=0){
-		print $mw->{error}->{code} . ': ' . $mw->{error}->{details}."\n";
+		msg($mw->{error}->{code} . ': ' . $mw->{error}->{details});
 		return 0;
 	}
-	print " downloaded file (if existant)\n" if $options->{'verbose'}>2;
+	msg(" downloaded file (if existant)") if $options->{'verbose'} > 2;
 	if($oldfile eq '' or $oldfile ne $$data){
-		print " trying to upload new file\n" if $options->{'verbose'}>2;
+		msg(" trying to upload new file") if $options->{'verbose'} > 2;
 		if(!$options->{'simulation'}){
 			# upload
 			#$mw->edit({
@@ -1524,7 +1531,7 @@ sub upload_file{
 		}
 		return 1;
 	}else{
-		print "won't force uploading. file is already online.\n";
+		msg("won't force uploading. file is already online.");
 		return 0;
 	}
 }
@@ -1579,6 +1586,21 @@ sub get_http_status{
 	return $response->code;
 }
 
+sub msg{
+	my $msg      = shift;
+	my $type     = shift;
+	$type = (defined $type ? "$type in ": '');
+	my $timestamp = strftime("%Y-%m-%d %H:%M:%S", gmtime());
+	# my ($package, $filename, $line, $subr, $has_args, $wantarray, $evaltext, 
+	# $is_require, $hints, $bitmask, $hinthash) = caller(0);
+	my @callers = caller(0);
+	my $line = $callers[2];
+	@callers = caller(1);
+	my $subr = $callers[3];
+	print "$timestamp $type$subr:$line: $msg\n";
+	return 1;
+}
+
 sub num_unique_elem{
 	my %hash;
 	@hash{@_} = 1;
@@ -1607,9 +1629,22 @@ sub parse_rc{
 		}
 		print Data::Dumper->Dump([\%parsed_msg]) if $verbose>4;
 	}else{
-		print $msg."\n" if $verbose>1;
+		msg($msg) if $verbose > 1;
 	}
 	return \%parsed_msg;
+}
+
+sub read_file_binary{
+	my $filename = shift;
+  open(my $FILE, '<:encoding(UTF-8)', $filename) or die $!;
+		binmode $FILE;
+		my $buffer;
+		my $data = '';
+		while(read($FILE, $buffer, 65536)){
+			$data .= $buffer;
+		}
+  close($FILE);
+	return \$data;
 }
 
 sub syntaxCheck{
@@ -1683,19 +1718,6 @@ sub syntaxCheck{
 		pod2usage(-exitval=>2);
 	}
 	return \%params;
-}
-
-sub read_file_binary{
-	my $filename = shift;
-  open(my $FILE, '<:encoding(UTF-8)', $filename) or die $!;
-		binmode $FILE;
-		my $buffer;
-		my $data = '';
-		while(read($FILE, $buffer, 65536)){
-			$data .= $buffer;
-		}
-  close($FILE);
-	return \$data;
 }
 
 sub show_diff{
@@ -1788,11 +1810,11 @@ if($params->{'delete'}){
 	my $delete_cat = 'Category:Löschen';
 	utf8::decode($delete_cat);
 	my @pages = grep {!/Template:L.schen/} $bot->get_pages_in_category($delete_cat);
-	print 'found '.@pages." pages.\n" if $options{'verbose'}>0;
-	print "adding manually set pages\n" if $options{'verbose'}>1;
+	msg('found '.@pages.' pages.') if $options{'verbose'} > 0;
+	msg('adding manually set pages') if $options{'verbose'} > 1;
 	push @pages, ();
 	for(@pages){
-		print " $_\n" if $options{'verbose'}>2 or $options{'verbose'}>0 and $options{'simulation'};
+		msg(" $_") if $options{'verbose'} > 2 or $options{'verbose'} > 0 and $options{'simulation'};
 		time_management(\@time_stack, $options{'max_edits_per_min'}, $options{'verbose'});
 		delete_wiki_page($mw, $_, $summary, \@time_stack, \$user_answer, \%options);
 	}
@@ -1809,7 +1831,7 @@ if(defined $params->{'http-status'}){
 	);
 	for my $url(@urls){
 		my $response_code = get_http_status($url);
-		print $response_code.' '.$url."\n";
+		msg($response_code.' '.$url);
 		sleep 5;
 	}
 }
@@ -1835,7 +1857,9 @@ if($params->{'irc'}){
 	sub rc_hook{
 		my $rc_msg = shift;
 		$pages{$rc_msg->{'page'}} = time;
-		print 'irc: ', ($pages{$rc_msg->{'page'}}-$start_ts), ' (#pages in stack: '.scalar(keys %pages).') ', $rc_msg->{'page'}, ', editor = ', $rc_msg->{'user'}, "\n" if $options{'verbose'}>1;
+		::msg('irc: '.($pages{$rc_msg->{'page'}}-$start_ts).
+			' (#pages in stack: '.scalar(keys %pages).') '.$rc_msg->{'page'}.
+			', editor = '.$rc_msg->{'user'}) if $options{'verbose'} > 1;
 		my @time_stack = ();           # needed for edit/min constraint
 		my $user_answer = '';          # user answer initially is "no"
 		# notifier on particular edits
@@ -1850,7 +1874,7 @@ if($params->{'irc'}){
 		while(my ($title, $timestamp) = each %pages){
 			if($timestamp + $delay < $now){
 				delete $pages{$title};
-				print ' old page: ', $title, "\n" if $options{'verbose'}>1;
+				::msg(' old page: '. $title) if $options{'verbose'} > 1;
 				push @updList, $title;
 			}
 		}
@@ -1863,13 +1887,13 @@ if($params->{'irc'}){
 				::cleanup_wiki_page(\$text, $page, $options{'verbose'});
 				if($text_bak ne $text){
 					::time_management(\@time_stack, $options{'max_edits_per_min'}, $options{'verbose'});
-					#print "* save $page_\n";
+					#::msg("* save $page_");
 					::save_wiki_page($bot, $page, $summary, \$text, \$text_bak, \@time_stack, 
 						\$user_answer, \%options);
 				}
 				::update_maintenance_lists($bot, $page, \$text, \@time_stack, \$user_answer, \%options);
 			}else{
-				print "notice: could not fetch page '$page'. maybe deleted already\n" if $options{'verbose'}>1;
+				::msg("could not fetch page '$page'. maybe deleted already", 'notice') if $options{'verbose'} > 1;
 			}
 		}
 	}
@@ -1878,11 +1902,11 @@ if($params->{'irc'}){
 	sub said {
 		my ($self, $message) = @_;
 		# print everything what is said to you
-		print "$message->{who}: $message->{body}\n" if $options{'verbose'}>3;
+		::msg("$message->{who}: $message->{body}") if $options{'verbose'} > 3;
 
 		# general
 		if(defined $message->{address} && $message->{address} eq $self->{nick}){
-			print $message->{who}.': '.$message->{body}."\n" if $options{'verbose'}>1;
+			::msg($message->{who}.': '.$message->{body}) if $options{'verbose'} > 1;
 			# help
 			if($message->{body}=~/^(?:help|was machst du\?|was kannst du\?)/){
 				$self->reply($message, help());
@@ -2399,7 +2423,7 @@ if($params->{'upload'}){
 	die "error in upload: file '$source' not found!\n" unless -e $source;
 	die "error in upload: summary not defined!\n" unless defined $summary;
 	die "error in upload: destination filename not defined!\n" unless defined $dest;
-	print "uploading file '$source' as '$dest' in wiki\n" if $options{'verbose'}>0;
+	msg("uploading file '$source' as '$dest' in wiki") if $options{'verbose'} > 0;
 	upload_file($mw, $source, $summary, $dest, \%options);
 }
 
@@ -2411,7 +2435,7 @@ if($params->{'usercontribs'}){
 	$options{'pages'}         = get_user_contribs(\%options);
 }
 
-print ''.localtime()."\n" if $params->{'verbose'}>1;
+msg('finished') if $params->{'verbose'} > 1;
 
 __END__
 
