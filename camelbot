@@ -24,7 +24,7 @@ use URI::Escape;           # uri_unescape
 use WWW::Mechanize;        # big web browser
 
 # global vars
-$main::VERSION = '0.72.20141231';
+$main::VERSION = '0.73.20141231';
 my $_re_url_class = qr/[^\]\[<>"'\x00-\x20\x7F)]|\)(?!\s)/;
 my $_re_ASIN = qr/\bASIN[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/;
 # comment 2014-12-03, seth: char class $_re_url_class contained | char in function cleanup_wiki_page; now deleted
@@ -1018,7 +1018,7 @@ sub notifier{
 					$text .= "\n== $heading ==\n$notice\n";
 					#if($text_bak ne $text){
 						time_management($time_stack, $options->{'max_edits_per_min'}, $options->{'verbose'});
-						#print "* save $page_\n";
+						#msg("* save $page_");
 						save_wiki_page($bot, $userpage, $heading, \$text, \$text_bak, $time_stack, $user_answer, $options);
 					#}
 				}
@@ -1843,7 +1843,9 @@ if($params->{'irc'}){
 	$| = 1; # deactivate buffering, so flush all the time
 
 	my $edit_filter_name_re = qr/(?:Bearbeitung|Missbrauch)sfilter/;
-	my %pages; # rc pages to check
+	my %rc_pages_shortterm; # rc pages to check
+	my %rc_pages_midterm;   # rc pages to check
+	my $delay_short = 10; # seconds
 	my $delay = 30*60; # seconds
 	my $start_ts = time; # only for debugging purposes
 	my $namespaces_re = join '|', grep {$_ ne ''} values {$bot->get_namespace_names()}; # get all namespaces except 0
@@ -1856,31 +1858,46 @@ if($params->{'irc'}){
 
 	sub rc_hook{
 		my $rc_msg = shift;
-		$pages{$rc_msg->{'page'}} = time;
-		::msg('irc: '.($pages{$rc_msg->{'page'}}-$start_ts).
-			' (#pages in stack: '.scalar(keys %pages).') '.$rc_msg->{'page'}.
+		$rc_pages_midterm{$rc_msg->{'page'}} = time;
+		$rc_pages_shortterm{$rc_msg->{'page'}} = time;
+		::msg('irc: '.($rc_pages_midterm{$rc_msg->{'page'}}-$start_ts).
+			' (#pages in stack: '.scalar(keys %rc_pages_midterm).') '.$rc_msg->{'page'}.
 			', editor = '.$rc_msg->{'user'}) if $options{'verbose'} > 1;
 		my @time_stack = ();           # needed for edit/min constraint
 		my $user_answer = '';          # user answer initially is "no"
-		# notifier on particular edits
-		::notifier($bot, $rc_msg->{'page'}, \@time_stack, \$user_answer, \%options);
 		# delayed clean up:
-		my @updList;
+		my @updList_midterm;
+		my @updList_shortterm;
 		# the $now variable should be defined outside of following loop, because 
 		# otherwise this could cause parallel (redundant?) loops for the same page. maybe
 		# time should be even more precise (Time::HiRes) to prevent from that effect.
 		my $now = time;
-		# after delay transfer pages from $pages to @updList
-		while(my ($title, $timestamp) = each %pages){
-			if($timestamp + $delay < $now){
-				delete $pages{$title};
-				::msg(' old page: '. $title) if $options{'verbose'} > 1;
-				push @updList, $title;
+		# after delay transfer pages from $rc_pages_shortterm to @updList_shortterm
+		while(my ($title, $timestamp) = each %rc_pages_shortterm){
+			if($timestamp + $delay_short < $now){
+				delete $rc_pages_shortterm{$title};
+				::msg(' short term update of page: '. $title) if $options{'verbose'} > 1;
+				push @updList_shortterm, $title;
 			}
 		}
-		# all pages in @updList shall be updated now.
+		# after delay transfer pages from $rc_pages_midterm to @updList_midterm
+		while(my ($title, $timestamp) = each %rc_pages_midterm){
+			if($timestamp + $delay < $now){
+				delete $rc_pages_midterm{$title};
+				::msg(' mid term update of page: '. $title) if $options{'verbose'} > 1;
+				push @updList_midterm, $title;
+			}
+		}
+		# all pages in @updList_shortterm shall be treated now.
+		for my $page(@updList_shortterm){
+			# notifier on particular edits; there needs to be some delay, because 
+			# otherwise it may occur that the notification is faster than the saving 
+			# process itself.
+			::notifier($bot, $page, \@time_stack, \$user_answer, \%options);
+		}
+		# all pages in @updList_midterm shall be treated now.
 		my $summary = 'kleinere korrekturen. feedback bitte auf [[user talk:lustiger_seth]] melden.';
-		for my $page(@updList){
+		for my $page(@updList_midterm){
 			my $text = $bot->get_text($page);
 			if(defined $text and ::is_allowed(\$text, $options{'username'}, $page)){
 				my $text_bak = $text;
