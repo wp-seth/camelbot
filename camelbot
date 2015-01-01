@@ -10,7 +10,7 @@ use File::Path qw(make_path); # create directories
 use File::Slurp qw(slurp write_file); # read/write files
 use Getopt::Long qw(:config bundling); # cli params
 use IPC::Run;              # used for irc bot
-#use List::Util 'shuffle';  
+#use List::Util 'shuffle';
 use LWP::UserAgent;        # fast, small web browser
 use Mail::Sendmail;        # sending e-mails
 use MediaWiki::Bot;        # bot for mediawiki, uses mediawiki-api-interface
@@ -24,7 +24,7 @@ use URI::Escape;           # uri_unescape
 use WWW::Mechanize;        # big web browser
 
 # global vars
-$main::VERSION = '0.73.20141231';
+$main::VERSION = '0.74.20150101';
 my $_re_url_class = qr/[^\]\[<>"'\x00-\x20\x7F)]|\)(?!\s)/;
 my $_re_ASIN = qr/\bASIN[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/;
 # comment 2014-12-03, seth: char class $_re_url_class contained | char in function cleanup_wiki_page; now deleted
@@ -38,6 +38,11 @@ my $_re_ASIN = qr/\bASIN[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/;
 #
 # sub cat_rename
 # 	moves a category and replaces all [[category:old]] by [[category:new]]
+#
+# sub check_external_link
+# 	given two successive parts $a1, $a2 of a string $a this function checks, 
+# 	whether second part of string $a2 is an url with http status 200. the first 
+# 	part of the string $a1 is used to detect the end of url in part two $a2.
 #
 # sub cleanup_wiki_page
 # 	standard cleaning up
@@ -117,6 +122,8 @@ my $_re_ASIN = qr/\bASIN[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/;
 #
 # sub test_and_replace
 # 	tests whether a regexp matches and replaces it. give some verbose output.
+# 	checks urls, breaks if http status != 200
+# 	returns number of replacements
 #
 # sub text_replacement
 # 	replaces text in wiki pages
@@ -242,6 +249,22 @@ sub cat_rename{
 		time_management(\@time_stack, $options{'max_edits_per_min'}, $options{'verbose'});
 		save_wiki_page($bot, $page, $summary, \$text, \$text_bak, \@time_stack, \$user_answer, \%options);
 	}
+}
+
+sub check_external_link{
+	my $pretext  = shift;
+	my $url      = shift;
+	my $verb_lvl = shift;
+	my $ok = 1;
+	if($$url =~ /^https?:\/\//){
+		if($$pretext =~ /url\s*=\s*$/){
+			$$url =~ s/^([^|}]+)[|}].*/$1/;
+		}
+		my $response_code = get_http_status($$url);
+		msg("  status of '$$url': $response_code") if $verb_lvl > 0;
+		$ok = 0 if $response_code != 200;
+	}
+	return $ok;
 }
 
 sub cleanup_wiki_page{
@@ -640,14 +663,12 @@ sub link_replacement{
 			my $text_bak = $text;
 			cleanup_wiki_page(\$text, $page, $verb_lvl);
 			if(defined $replacement){
-				#test_and_replace(
-				#	\$text, 
-				#	qr/$re_prot_part$re_url_part(?<trail>$_re_url_class*)(?:(?<posturl>.*?)$re_deadlink)?/m, 
-				#	'"'.$replacement.'$+{trail}".($+{posturl} // "")', 
-				#	$verb_lvl
-				#);
-				$text =~ s/(?<preurl>.*?)\K(?<url>$re_prot_part$re_url_part(?<trail>$_re_url_class*+))(?=(?<posturl>.*?$re_deadlink|.*))
-					/test_and_replace_with_funcref($replacement, $+{preurl}, $+{'url'}, $+{'posturl'}, $verb_lvl)/xmge;
+				#	test_and_replace(
+				#		\$text, 
+				#		qr/$re_prot_part$re_url_part(?<trail>$_re_url_class*)(?:(?<posturl>.*?)$re_deadlink)?/m, 
+				#		$replacement, 
+				#		$verb_lvl
+				#	);
 			}elsif($options{'delete_link'}){
 				if($options{'refs'}){
 					if($options{'ref2deadlink'}){
@@ -767,8 +788,12 @@ sub link_replacement{
 
 			#cleanup_wiki_page(\$text, $page, $verb_lvl);
 			if(defined $replacement){
-				$text =~ s/(?<preurl>.*?)\K(?<url>$re_prot_part$re_url_part(?<trail>$_re_url_class*+))(?=(?<posturl>.*?$re_deadlink|.*))
-					/test_and_replace_with_funcref($replacement, $+{preurl}, $+{'url'}, $+{'posturl'}, $verb_lvl)/xmge;
+				#	test_and_replace(
+				#		\$text, 
+				#		qr/$re_prot_part$re_url_part(?<trail>$_re_url_class*)(?:(?<posturl>.*?)$re_deadlink)?/m, 
+				#		$replacement, 
+				#		$verb_lvl
+				#	);
 			}elsif($options{'delete_link'}){
 				if($options{'nonrefs'}){
 					# [link]
@@ -1298,30 +1323,29 @@ sub test_and_replace{
 	my $regexp_s = shift;
 	my $regexp_r = shift;
 	my $verb_lvl = shift // 0;
-	if($verb_lvl>0){
-		my $strpos = 0;
-		# comment 2014-12-03, seth: in the following pattern p-modifier should not be added as postfix,
-		# because ${^MATCH} etc. won't be available. I don't know the reason for that.
-		while(substr($$text, $strpos) =~ /(?p:$regexp_s)/m){ # if searched pattern occurs
-			my $len_prematch = length(${^PREMATCH});
-			$strpos += length(${^PREMATCH}) + length(${^MATCH});
-			my $prematch = ${^PREMATCH};
-			my $match = ${^MATCH};
-			my $link = ${^PREMATCH}.${^MATCH};      # save matched text
-			msg("   ".$match);                      # print old text
-			$link =~s/$regexp_s/$regexp_r/mee;      # replace
-			$link = substr($link, $len_prematch);
-			msg(" ->".$link);                       # print replaced text
-			#if($link=~/^https?:\/\// or $match=~/^https?:\/\//){
-			if($link=~/^https?:\/\//){
-				my $url = ($link=~/^https?:\/\//) ? $link : $match;
-				my $response_code = get_http_status($url);
-				msg('  status: '.$response_code);
-				return if $response_code != 200;
-			}
+	my $strpos = 0;
+	#my $test = $$text; # for debugging only
+	my $array_of_changes = [];
+	my $numChanges = $$text=~s/$regexp_s/
+		my $match = ${^MATCH};
+		my $prematch = ${^PREMATCH};
+		my $replaced = eval($regexp_r);
+		# cope with links
+		if(!check_external_link(\$prematch, \$replaced, $verb_lvl)){
+			$replaced = $match;
+		}
+		push(@$array_of_changes, [$match, $replaced]); 
+		$replaced;
+		/gpme;
+	if($verb_lvl > 0){
+		for my $repl(@$array_of_changes){
+			msg("   ".$repl->[0]);
+			msg(" ->".$repl->[1]);
 		}
 	}
-	$$text=~s/$regexp_s/$regexp_r/gmee; # now run on real string
+	#$test=~s/$regexp_s/$regexp_r/gmee; # just for debugging
+	#msg("wrong replacing with '$regexp_r'?", 'error') if $$text ne $test;
+	return $numChanges;
 }
 
 sub text_replacement{
@@ -1777,6 +1801,7 @@ sub write_csv{
 	return 1;
 }
 
+# main
 my $params = syntaxCheck(@ARGV);
 my ($bot, $mw, $api) = login($params->{'username'}, undef, $params);
 my %options = (
@@ -1967,226 +1992,6 @@ if($params->{'irc'}){
 	#$poe_kernel->run();
 }
 
-my %urls = (
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2000/com2000_0001de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2001/com2001_0366de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2001/com2001_0398de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2001/com2001_0428de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2001/com2001_0582de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2004/com2004_0018de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2004/com2004_0478de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2005/com2005_0280de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2005/com2005_0324de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2005/com2005_0446de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2005/com2005_0447de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2005/com2005_0504de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2005/com2005_0666de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2005/com2005_0670de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2006/com2006_0092de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2006/com2006_0849de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2007/com2007_0023de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/com/2007/com2007_0533de01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/1970/L/01970L0524-20030331-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/1973/L/01973L0023-19930802-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/1977/L/01977L0388-20060101-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/1979/L/01979L0409-20070101-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/1985/L/01985L0337-20030625-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/1989/R/01989R1553-20030605-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/1991/L/01991L0414-20051201-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/1991/L/01991L0439-20070101-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/1992/L/01992L0043-20070101-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/1993/L/01993L0042-20071011-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/1993/L/01993L0068-19980812-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/1997/R/01997R0338-20050822-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/2000/R/02000R1150-20041128-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/2000/R/02000R1825-20070323-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/2000/R/02000R2037-20070731-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/2001/R/02001R0539-20070119-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/2001/R/02001R0999-20060709-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/2002/R/02002R1605-20070101-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/2002/R/02002R1774-20060401-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/2003/R/02003R2032-20050729-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/2004/L/02004L0018-20070101-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/consleg/2005/R/02005R0001-20050125-de.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/1998/l_123/l_12319980424de00010063.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/1998/l_207/l_20719980723de00010046.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/1998/l_274/l_27419981009de00010021.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/1999/l_161/l_16119990626de00010042.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2000/l_013/l_01320000119de00120020.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2000/l_106/l_10620000503de00210048.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2000/l_136/l_13620000608de00900107.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2000/l_159/l_15920000630de02160217.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2000/l_160/l_16020000630de00370052.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2000/l_253/l_25320001007de00420046.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2000/l_275/l_27520001027de00390043.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2001/c_209/c_20920010727de00010004.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2001/c_299/c_29920011025de00010004.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2001/l_031/l_03120010202de00210022.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2001/l_047/l_04720010216de00010031.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2001/l_098/l_09820010407de00310043.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2001/l_150/l_15020010606de00040005.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2001/l_197/l_19720010721de00300037.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2002/ce072/ce07220020321de01420146.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2002/ce331/ce33120021231de01240125.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2002/l_031/l_03120020201de00010024.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2002/l_177/l_17720020706de00210022.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2002/l_187/l_18720020716de00140020.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2002/l_190/l_19020020718de00010018.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2002/l_208/l_20820020805de00100027.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2002/l_242/l_24220020910de00010015.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2002/l_245/l_24520020912de01430279.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2002/l_277/l_27720021015de00100014.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2003/l_036/l_03620030212de00010006.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2003/l_042/l_04220030215de00450046.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2003/l_064/l_06420030307de00010008.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2003/l_123/l_12320030517de00420046.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2003/l_127/l_12720030523de00010008.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2003/l_156/l_15620030625de00170024.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2003/l_175/l_17520030715de00450046.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2003/l_224/l_22420030906de00270028.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2003/l_264/l_26420031015de00380039.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2003/l_307/l_30720031124de00010096.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2003/l_345/l_34520031231de00640089.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2003/l_345/l_34520031231de00900096.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2004/c_091/c_09120040415de00050005.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2004/c_243/c_24320040930de00030003.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2004/c_298/c_29820041203de00020002.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2004/c_310/c_31020041216de00410054.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2004/c_313/c_31320041218de00030003.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2004/c_321/c_32120041228de00030003.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/c_011/c_01120050115de00030003.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/c_061/c_06120050311de00060006.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/c_061/c_06120050311de00070007.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/c_131/c_13120050528de00090009.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/c_168/c_16820050708de00010018.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/c_244/c_24420051004de00030003.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/c_244/c_24420051004de00040004.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/c_283/c_28320051116de00170017.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/c_283/c_28320051116de00180018.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/c_308/c_30820051206de00170017.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/c_326/c_32620051222de00010149.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/l_075/l_07520050322de00330034.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/l_143/l_14320050607de00030008.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/l_149/l_14920050611de00140021.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/l_157/l_15720050621de00110027.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/l_157/l_15720050621de02030220.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/l_157/l_15720050621de03910392.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/l_205/l_20520050806de00210027.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/l_209/l_20920050811de00010025.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/l_277/l_27720051021de00010040.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/l_280/l_28020051025de00180019.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/l_309/l_30920051125de00150036.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/l_323/l_32320051209de00010050.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/l_328/l_32820051215de00600061.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/l_338/l_33820051222de00010026.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2005/l_347/l_34720051230de00830090.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/c_020/c_02020060127de00300030.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/c_033/c_03320060209de00050005.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/c_033/c_03320060209de00060006.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/c_053/c_05320060303de00030003.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/c_090/c_09020060413de00040028.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/c_186/c_18620060809de00020002.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/c_247/c_24720061013de00010016.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/c_248/c_24820061014de00020002.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/c_248/c_24820061014de00030003.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/c_254/c_25420061020de00060007.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/c_255/c_25520061021de00040008.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/c_260/c_26020061028de00110011.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/c_261/c_26120061028de00210021.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/ce287/ce28720061124de03060311.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/ce321/ce32120061229de00010331.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_033/l_03320060204de00010017.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_102/l_10220060411de00010013.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_105/l_10520060413de00010032.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_114/l_11420060427de00640085.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_157/l_15720060609de00080023.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_157/l_15720060609de00240086.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_177/l_17720060630de00010200.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_190/l_19020060712de00010098.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_204/l_20420060726de00010009.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_210/l_21020060731de00120018.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_210/l_21020060731de00820093.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_247/l_24720060909de00320045.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_302/l_30220061101de00010002.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_344/l_34420061208de00010467.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_345/l_34520061208de00010009.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_364/l_36420061220de00050024.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_374/l_37420061227de00100019.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_376/l_37620061227de00360068.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_379/l_37920061228de00050010.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_403/l_40320061230de00180060.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2006/l_404/l_40420061230de00260038.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2007/c_065/c_06520070321de00030006.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2007/l_136/l_13620070529de00030280.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2007/l_149/l_14920070609de00010016.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2007/l_151/l_15120070613de00010016.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2007/l_163/l_16320070623de00170021.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2007/l_171/l_17120070629de00010016.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2007/l_195/l_19520070727de00080009.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2007/l_239/l_23920070912de00500060.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2007/l_247/l_24720070921de00210055.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2007/l_263/l_26320071009de00010160.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2007/l_286/l_28620071031de00010894.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/de/oj/2007/l_332/l_33220071218de00270045.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/en/com/2005/com2005_0261en01.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/en/consleg/2001/L/02001L0113-20040712-en.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/en/oj/2002/l_142/l_14220020531en00590073.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/en/oj/2005/l_019/l_01920050121en00550069.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/en/oj/2005/l_178/l_17820050709en00010098.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/en/oj/2005/l_214/l_21420050819en00650065.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/en/oj/2005/l_271/l_27120051015en00480050.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/en/oj/2005/l_340/l_34020051223en00640066.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/en/oj/2006/l_144/l_14420060531en00250029.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/en/oj/2006/l_177/l_17720060630en02010255.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/en/oj/2006/l_219/l_21920060810en00230027.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/en/oj/2006/l_379/l_37920061228en00050010.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/en/oj/2006/l_396/l_39620061230en00010849.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/en/oj/2007/l_325/l_32520071211en00030065.pdf' => undef,
-	'http://eur-lex.europa.eu/LexUriServ/site/hu/oj/2007/c_088/c_08820070421hu00070009.pdf' => undef,
-);
-my %longlang = (
-	'de' => 'deu',
-	'en' => 'eng',
-	'hu' => 'hun',
-);
-for my $url(keys %urls){
-	if($url =~ /
-		(?<base>http:\/\/eur-lex\.europa\.eu\/)LexUriServ\/site\/(?<lang>[a-z]{2})\/(?<com>com)\/
-		(?<year>[0-9]{4})\/\k<com>\k<year>_(?<some_id>[0-9]{4})\k<lang>01
-		\.(?<ext>pdf)/x){
-		$urls{$url} = "$+{'base'}legal-content\/".uc($+{'lang'}).'/TXT/'.uc($+{'ext'}).
-			"/?uri=".uc($+{'com'}).":$+{'year'}:$+{'some_id'}:FIN";
-	}elsif($url =~ /
-		(?<base>http:\/\/eur-lex\.europa\.eu\/)LexUriServ\/site\/(?<lang>[a-z]{2})\/consleg\/
-		(?<year>[0-9]{4})\/(?<lr>[LR])\/(?<some_id>0\k<year>\k<lr>[0-9]{4}-[0-9]{8})-\k<lang>
-		\.(?<ext>pdf)/x){
-		$urls{$url} = "$+{'base'}legal-content\/".uc($+{'lang'}).'/TXT/'.uc($+{'ext'}).
-			"/?uri=CELEX:$+{some_id}";
-	}elsif($url =~ /
-		(?<base>http:\/\/eur-lex\.europa\.eu\/)LexUriServ\/site\/(?<lang>[a-z]{2})\/(?<oj>oj)\/
-		(?<year>[0-9]{4})\/(?<wtf>c_|ce|l_)(?<some_id>[0-9]{3})\/\k<wtf>\k<some_id>\k<year>[0-9]{4}\k<lang>(?<another_id>[0-9]{4})[0-9]{4}
-		\.(?<ext>pdf)/x){
-		$urls{$url} = "$+{'base'}legal-content\/".uc($+{'lang'}).'/TXT/'.uc($+{'ext'}).
-			"/?uri=uriserv:".uc($+{'oj'}).".".uc($+{'wtf'}).".$+{'year'}.$+{'some_id'}.01.$+{'another_id'}.01.".uc($longlang{$+{'lang'}});
-	}else{
-		die "could not eruate new url of '$url'\n";
-	}
-}
-
-# will be used as a func ref
-sub link_replace_re0{
-	my $old_url     = shift;
-	my $post_url    = shift;
-	my $verbose     = shift;
-	my $anchor = '';
-	if($old_url=~/(#.+)$/){
-		$anchor = $1;
-		$old_url = substr($old_url, 0, -length($anchor));
-	}
-	my $new_url = $urls{$old_url} // $old_url;
-	return $new_url.$anchor;
-}
-
 if($params->{'link-replacement'}){
 	$options{'articles'}      = 1;  # 0 = don't work on namespace 0; 1 = work on namespace 0
 	$options{'nonarticles'}   = 1;  # 0 = don't work on namespace!=0; 1 = work on namespace!=0
@@ -2216,35 +2021,19 @@ if($params->{'link-replacement'}){
 	#$options{'re_url_part'}   = qr/eur-lex.europa.eu\/legal-content\/.*?uniserv/;
 	#$options{'re_url_part'}   = qr/eur-lex.europa.eu\/LexUriServ\/site\//;
 	#$options{'delete_link'}   = undef;
-	#$options{'replacement'}   = sub {
-	#	my $old_url     = shift;
-	#	my $post_url    = shift;
-	#	my $verbose     = shift;
-	#	my $new_url = $old_url;
-	#	if($old_url=~/(\Qeur-lex.europa.eu\/legal-content\/\E[A-Z]{2}\/TXT\/PDF\/\?uri=)uniserv(:OJ\.[A-Z_]+\.[0-9]{4}\.[0-9]+\.01)([0-9]{4}\.01\.[A-Z]{3})$/){
-	#		$new_url = 'http://'.$1.'uriserv'.$2.'.'.$3;
-	#	}
-	#	#if($old_url=~/www\.bgblportal\.de\/BGBL\/bgbl1f\/bgbl(\d+s\d+[a-z]?)\.?pdf/){
-	#	#	$new_url = 'http://www.bgbl.de/Xaver/start.xav?startbk=Bundesanzeiger_BGBl&start=//*%5B\@attr_id=%27bgbl'.$1.'.pdf%27%5D';
-	#	#}
-	#	return $new_url;
-	#};
-	#$options{'replacement'}   = \&link_replace_re0;
+	#$options{'replacement'}   = # function disabled, has to be re-implemented
+	# $from = qr/(\Qeur-lex.europa.eu\/legal-content\/\E[A-Z]{2}\/TXT\/PDF\/\?uri=)uniserv(:OJ\.[A-Z_]+\.[0-9]{4}\.[0-9]+\.01)([0-9]{4}\.01\.[A-Z]{3})$/;
+	# $to   = 'http://'.$1.'uriserv'.$2.'.'.$3;
+	# $from = qr/www\.bgblportal\.de\/BGBL\/bgbl1f\/bgbl(\d+s\d+[a-z]?)\.?pdf/;
+	# $to   = 'http://www.bgbl.de/Xaver/start.xav?startbk=Bundesanzeiger_BGBl&start=//*%5B\@attr_id=%27bgbl'.$1.'.pdf%27%5D';
 	#$options{'summary'}       = 'link fixes, see [[WP:FZW#Mehrere_Hundert_Weblinks_auf_EUR-Lex_defekt]]';
 
 	# 2. linkfix
 	#$options{'searched_link'} = '*.google.com';
 	#$options{'re_url_part'}   = qr/[a-z0-9]+\.google\.[a-z]+\/.*?[?&]url=[^&]+/;
 	#$options{'replacement'}   = sub {
-	#	my $old_url     = shift;
-	#	my $post_url    = shift;
-	#	my $verbose     = shift;
-	#	my $new_url = $old_url;
-	#	if($old_url=~/[a-z0-9]+\.google\.[a-z]+\/.*?[?&]url=([^&]+)/){
-	#		$new_url = $1;
-	#	}
-	#	return $new_url;
-	#};
+	# $from = qr/[a-z0-9]+\.google\.[a-z]+\/.*?[?&]url=([^&]+)/;
+	# $to   = $1;
 	#$options{'summary'}       = 'resolve google redirects, see [[mTalk:Spam_blacklist#Google_redirect_spam]]';
 	
 	# 3. linkfix: remove double http://
