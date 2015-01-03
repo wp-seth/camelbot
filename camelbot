@@ -24,7 +24,7 @@ use URI::Escape;           # uri_unescape
 use WWW::Mechanize;        # big web browser
 
 # global vars
-$main::VERSION = '0.76.20150103';
+$main::VERSION = '0.77.20150103';
 # comment 2014-12-03, seth: char class $_re_url_class contained | char in function cleanup_wiki_page; now deleted
 my $_re_url_class = qr/[^\]\[<>"'\x00-\x20\x7F)]|\)(?!\s)/;
 my $_re_ASIN = qr/\bASIN[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/;
@@ -252,16 +252,17 @@ sub cat_rename{
 }
 
 sub check_external_link{
-	my $pretext  = shift;
-	my $url      = shift;
-	my $verb_lvl = shift;
+	my $pretext   = shift;
+	my $urlstring = shift;
+	my $verb_lvl  = shift;
 	my $ok = 1;
-	if($$url =~ /^https?:\/\//){
-		if($$pretext =~ /url\s*=\s*$/){
-			$$url =~ s/^([^|}]+)[|}].*/$1/;
+	if($$urlstring =~ /^https?:\/\//){
+		my $url = $$urlstring;
+		if($$pretext =~ /url\s*=\s*$/ and $$urlstring =~ /^([^|}]+)[|}]/){
+			$url = $1;
 		}
-		my $response_code = get_http_status($$url);
-		msg("  status of '$$url': $response_code") if $verb_lvl > 0;
+		my $response_code = get_http_status($url);
+		msg("  status of '$url': $response_code") if $verb_lvl > 0;
 		$ok = 0 if $response_code != 200;
 	}
 	return $ok;
