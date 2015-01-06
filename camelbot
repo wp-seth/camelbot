@@ -24,7 +24,7 @@ use URI::Escape;           # uri_unescape
 use WWW::Mechanize;        # big web browser
 
 # global vars
-$main::VERSION = '1.01.20150106';
+$main::VERSION = '1.02.20150106';
 
 # functions
 # =========
@@ -272,6 +272,7 @@ sub syntaxCheck{
 	sub new{
 		my $class = shift; 
 		my $params = shift;
+		my $current_year = ::strftime("%Y", gmtime());
 		my $self = bless {
 			# 0 = don't ask user; 1  = ask user for every action
 			'ask_user'     => $params->{'ask_user'} // 0, 
@@ -284,7 +285,10 @@ sub syntaxCheck{
 			#'mw_password'  => $mw_password, # not needed permanently
 			'mw_username'  => $params->{'mw_username'},
 			're_url_class' => qr/[^\]\[<>"'\x00-\x20\x7F)]|\)(?!\s)/,
-			're_ASIN'      => qr/\bASIN[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/,
+			're_maintenance'  => {
+				'ASIN'      => qr/\bASIN[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/,
+				'cat dead'  => qr/\[\[\s*(?i:category|kategorie):\s*[Gg]estorben[\s|_]$current_year\s*(?:\|[^\]]*)?\]\]/,
+			},
 			# 0 = don't show diff; 1 = show a diff, 2 = gui
 			'showdiff'     => $params->{'showdiff'} // 0, 
 			# 0 = do real edits; 1 = simulate only
@@ -1196,12 +1200,12 @@ sub syntaxCheck{
 		if(defined $text){
 			# ASINs are unwanted in w:de
 			my $notify = 0;
-			my $num_matches =()= $text =~ /$self->{'re_ASIN'}/g;
+			my $num_matches =()= $text =~ /$self->{'re_maintenance'}->{'ASIN'}/g;
 			if($num_matches > 0){
 				# compare with older version
 				if(@hist > 1 and defined $hist[1]->{'revid'}){
 					my $text_prev_version = $self->{'mw_bot'}->get_text($page, $hist[1]->{'revid'});
-					my $num_matches_pv =()= $text_prev_version =~ /$self->{'re_ASIN'}/g;
+					my $num_matches_pv =()= $text_prev_version =~ /$self->{'re_maintenance'}->{'ASIN'}/g;
 					if($num_matches_pv < $num_matches){
 						$notify = 1;
 					}
@@ -1771,68 +1775,89 @@ sub syntaxCheck{
 		my $maintenance_lists = shift; # maintenance lists
 		if(defined $page and not defined $text){
 			my $text = $self->{'mw_bot'}->get_text($page);
-			$text = \$text;
+			$text = \$text if defined $text;
 		}
-		if(($type eq 'ASIN' or $type eq 'all_types') and 
-			(not defined $page or $$text=~/$self->{'re_ASIN'}/)
-		){
-			$self->msg('check ASIN') if $self->{'verbosity'} > 0;
-			my $ml = 'User:CamelBot/maintenance list/ASIN';
-			my $ml_text = $self->{'mw_bot'}->get_text($ml) // '';
-			my $ml_text_bak = $ml_text;
-			my $intro = "dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet, die mind. eine [[Amazon Standard Identification Number|ASIN]] enthalten.\n
-	CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass in einem artikel eine ASIN steht, meldet er das nach ca. 30 minuten hier auf dieser seite. dabei fuegt er gefundene artikel nur der liste hinzu. loeschen muss man derzeit noch manuell.\n
-	== liste ==\n";
-			my $outro = "\n\n[[Kategorie:Wikipedia:Wartungskategorie|ASIN]]";
-			my $table;
-			my $wikitable;
-			my $tablestyle = {
-				'table'  => 'class="wikitable sortable"',
-			};
-			if($ml_text =~/^(.*\n== [lL]iste? ==\n+.*?)(\{\|.*?\|\})\n(.*)$/s){ # extract (save) old intro
-				$intro = $1;
-				$wikitable = $2;
-				$outro = $3;
-			}else{
-				$self->msg('could not fetch table. resetting page.', 'notice') if $self->{'verbosity'} > 0;
-				$wikitable = '{| '.$tablestyle->{'table'}."\n".
-					"! page !! recognized ASIN by CamelBot\n".
-					'|}';
-			}
-			$table = $self->wikitable2array(\$wikitable);
-			# check all old entries; search new entry, if not in array, then push
-			my $already_in_list = 0;
-			my $new_entry = defined $page ? "[[$page]]" : undef;
-			$table->{'body'} = [grep {
-				my $text = '';
-				if(defined $new_entry and $_->[0] eq $new_entry){
-					$self->msg("page '$page' already in list") if $self->{'verbosity'} > 0;
-					$already_in_list = 1;
-				}elsif($_->[0] =~ /^\[\[(.*)\]\]$/){
-					my $page_with_asin = $1;
-					$text = $self->{'mw_bot'}->get_text($page_with_asin);
+		if(not defined $page or defined $text){
+			my %intros = (
+				'ASIN' => "dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet, die mind. eine [[Amazon Standard Identification Number|ASIN]] enthalten.\n
+CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass in einem artikel eine ASIN steht, meldet er das nach ca. 30 minuten hier auf dieser seite. dabei fuegt er gefundene artikel nur der liste hinzu. auch das loeschen von eintraegen, die ASIN nicht mehr enthalten, uebernimmt CamelBot.\n
+== liste ==\n",
+				'cat dead' => "dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet, die der category ''gestorben " . (::strftime('%Y', gmtime())) . "'' hinzugefuegt wurden.\n
+CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass ein artikel dieser category hinzugefuegt wird, meldet er das nach ca. 30 minuten hier auf dieser seite. dabei fuegt er gefundene artikel nur der liste hinzu. loeschen muss man manuell.\n
+== liste ==\n",
+			);
+			for my $mt_type(keys %{$self->{'re_maintenance'}}){
+				if(($type eq $mt_type or $type eq 'all_types') and 
+					(not defined $page or $$text=~/$self->{'re_maintenance'}->{$mt_type}/)
+				){
+					# todo: how to cope with cat dead?
+					next if $mt_type eq 'cat dead';# and defined $$text 
+					#	and $$text =~/(?:[cC]ategory|[kK]ategorie)\s*:\s*[nN]ekrolog/;
+					$self->msg("check '$mt_type'") if $self->{'verbosity'} > 0;
+					my $ml = "User:CamelBot/maintenance list/$mt_type";
+					my $ml_text = $self->{'mw_bot'}->get_text($ml) // '';
+					my $ml_text_bak = $ml_text;
+					my $intro = $intros{$mt_type};
+					my $outro = "\n\n[[Kategorie:Wikipedia:Wartungskategorie|$mt_type]]";
+					my $table;
+					my $wikitable;
+					my $tablestyle = {
+						'table'  => 'class="wikitable sortable"',
+					};
+					if($ml_text =~ /^(.*\n== [lL]iste? ==\n+.*?)(\{\|.*?\|\})\n(.*)$/s){ # extract (save) old intro
+						$intro = $1;
+						$wikitable = $2;
+						$outro = $3;
+					}else{
+						$self->msg('could not fetch table. resetting page.', 'notice') if $self->{'verbosity'} > 0;
+						$wikitable = '{| '.$tablestyle->{'table'}."\n".
+							"! page !! detected by CamelBot\n".
+							'|}';
+					}
+					$table = $self->wikitable2array(\$wikitable);
+					# check all old entries; search new entry, if not in array, then push
+					my $already_in_list = 0;
+					my $new_entry = defined $page ? "[[$page]]" : undef;
+					$table->{'body'} = [grep {
+							my $text = '';
+							if(defined $new_entry and $_->[0] eq $new_entry){
+								$self->msg("page '$page' already in list") if $self->{'verbosity'} > 0;
+								$already_in_list = 1;
+							}elsif($_->[0] =~ /^\[\[(.*)\]\]$/){
+								my $page_with_asin = $1;
+								$text = $self->{'mw_bot'}->get_text($page_with_asin);
+							}
+							$text =~ /$self->{'re_maintenance'}->{$mt_type}/ or $already_in_list;
+						} @{$table->{'body'}}
+					];
+					if(defined $new_entry and $already_in_list==0){
+						# add new list entry
+						$self->msg("add new list entry '$page'") if $self->{'verbosity'} > 0;
+						push @{$table->{'body'}}, [$new_entry, ::strftime("%Y-%m-%d", gmtime())];
+					}
+					$maintenance_lists->{$mt_type} = {}; # reset and refill list
+					for my $entry(@{$table->{'body'}}){
+						$maintenance_lists->{$mt_type}->{substr($entry->[0], 2, -2)} = 1;
+					}
+					unshift @{$table->{'body'}}, [@{$table->{'header'}}];
+					$table->{'header'} = 1;
+					my $full_auto = 0;
+					$wikitable = $self->table2wikitext($table, $tablestyle, $full_auto);
+					# rebuild page
+					$ml_text = $intro.$wikitable.$outro;
+					$self->time_management();
+					$self->save_wiki_page($ml, 'update maintenance list', \$ml_text, \$ml_text_bak);
 				}
-				$text =~ /$self->{'re_ASIN'}/ or $already_in_list;
-				} @{$table->{'body'}}
-			];
-			if(defined $new_entry and $already_in_list==0){
-				# add new list entry
-				push @{$table->{'body'}}, [$new_entry, ::strftime("%Y-%m-%d", gmtime())];
 			}
-			$maintenance_lists->{'ASIN'} = {}; # reset and refill list
-			for my $entry(@{$table->{'body'}}){
-				$maintenance_lists->{'ASIN'}->{substr($entry->[0], 2, -2)} = 1;
+			return 1;
+		}else{
+			if(defined $page){
+				$self->msg("could not fetch page '$page'. maybe deleted already", 'notice') if $self->{'verbosity'} > 0;
+			}else{
+				$self->msg('no page and no text defined. this seems senseless.', 'notice') if $self->{'verbosity'} > 0;
 			}
-			unshift @{$table->{'body'}}, [@{$table->{'header'}}];
-			$table->{'header'} = 1;
-			my $full_auto = 0;
-			$wikitable = $self->table2wikitext($table, $tablestyle, $full_auto);
-			# rebuild page
-			$ml_text = $intro.$wikitable.$outro;
-			$self->time_management();
-			$self->save_wiki_page($ml, 'update maintenance list', \$ml_text, \$ml_text_bak);
+			return 0;
 		}
-		return 1;
 	}
 
 	sub upload_file{
@@ -1951,7 +1976,7 @@ sub syntaxCheck{
 		$self->{'rc_pages_shortterm'} = {};   # rc pages to check
 		$self->{'rc_pages_midterm'} = {};     # rc pages to check
 		$self->{'rc_pages_maintenance'} = {}; # rc special pages to check
-		$self->{'delay'} = 29*60; # seconds
+		$self->{'delay'} = 30*60; # seconds
 		$self->{'delay_short'} = 9; # seconds
 		$self->{'start_ts'} = time; # only for debugging purposes
 		# get all namespaces except 0
@@ -2124,7 +2149,7 @@ if(defined $params->{'http-status'}){
 
 if($params->{'irc'}){
 	$camelbot->update_edit_filter_index();
-	my $username = 'CamelBot_';
+	my $username = 'CamelBot';
 	my $bot_rc = CamelBotIRC->new($camelbot,{
 		server   => 'irc.wikimedia.org',
 		channels => ['#de.wikipedia'],
