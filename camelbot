@@ -11,8 +11,10 @@ use Getopt::Long qw(:config bundling); # cli params
 use Pod::Usage;            # cli params help
 
 # global vars
-$main::VERSION = '1.03.20150106';
+$main::VERSION = '1.04.20150108';
 
+# packages: CamelBot, CamelBotIRC
+#
 # functions
 # =========
 # global functions
@@ -177,7 +179,6 @@ sub syntaxCheck{
 	my %params = ( # default cli params
 		'cat-add'            => 0,     # add pages to a category
 		'cat-change'         => 0,     # cat change
-		'create-user-page'   => undef, # create user page of a user if not existing
 		'delete'             => 0,     # delete pages
 		'download-by-prefix' => undef, # download pages by prefix
 		'http-status'        => undef, # check reachability of url
@@ -204,7 +205,6 @@ sub syntaxCheck{
 	GetOptions(\%params,
 		"cat-add",
 		"cat-change|c",
-		"create-user-page=s",
 		"delete",
 		"download-by-prefix=s",
 		"http-status=s",
@@ -257,12 +257,9 @@ sub syntaxCheck{
 {
 	package CamelBot;
 	use Data::Dumper;          # for debugging purposes
-	use Encode;
 	use File::Slurp qw(write_file); # read/write files
 	use IPC::Run;              # used for tidy
-	#use List::Util 'shuffle';
 	use LWP::UserAgent;        # fast, small web browser
-	use Mail::Sendmail;        # sending e-mails
 	use MediaWiki::Bot;        # bot for mediawiki, uses mediawiki-api-interface
 	use POSIX qw/strftime/;    # format timestamp
 	use Term::ReadKey;         # used for user input
@@ -392,18 +389,17 @@ sub syntaxCheck{
 		# == link fixes ==
 		# === double protocol ===
 		$changes->{'double protocol'} = $self->test_and_replace($text, 
-			qr/(?:http:|(?<=\[))\/\/http:?\/\/($self->{'re_url_class'}+)/m, 
-			'"http:\/\/$1"');
+			qr/(?:http:|(?<=\[))\/\/(https?):?\/\/($self->{'re_url_class'}+)/m, 
+			'"$1:\/\/$2"');
 		# === technically superfluous external links ===
 		if($page ne 'Hypertext Transfer Protocol Secure'){
 			$changes->{'lf pseudo-external links'} = $self->test_and_replace($text, 
-				#qr/\[{1,2}(https?:\/\/de\.wikipedia\.org\/wiki\/[^\]| #]++(?:#(?!mediaviewer)[^\]| ]+)?) ([^\]]+)\]{1,2}/m, 
 				qr/\[
 					{1,2}(https?:\/\/de\.wikipedia\.org\/wiki\/[^\]|\x20\x23]++
 					(?:\x23(?!mediaviewer)[^\]|\x20]+)?)\s
 					([^\]]+)
 				\]{1,2}/mx, 
-				'"[[".url2title($1).(url2title($1) eq $2 ? "" : "|$2")."]]"');
+				'"[[".$self->url2title($1).($self->url2title($1) eq $2 ? "" : "|$2")."]]"');
 		}
 		# === specific domains ===
 		# see [https://de.wikipedia.org/w/index.php?title=MediaWiki_Diskussion:
@@ -423,6 +419,7 @@ sub syntaxCheck{
 	sub delete_marked_pages{
 		my $self = shift;
 		my $summary = 'deleting marked page';
+		# wiki dependent
 		my $delete_cat = 'Category:Löschen';
 		utf8::decode($delete_cat);
 		my @pages = grep {!/Template:L.schen/} 
@@ -779,7 +776,7 @@ sub syntaxCheck{
 					ucend       => $ucend,
 					uclimit     => '10',
 				};
-				my $mw_options = {'max' => 2};
+				my $mw_options = {'max' => 1};
 				while($ucstart gt $ucend){
 					$self->msg("ucstart = $ucstart, ucend = $ucend");
 					my $tmp = $self->{'mw_api'}->api($query, $mw_options);
@@ -1127,7 +1124,7 @@ sub syntaxCheck{
 		my @callers = caller(0);
 		my $line = $callers[2];
 		@callers = caller(1);
-		my $subr = $callers[3];
+		my $subr = $callers[3] // '[no sub]';
 		print "$timestamp $type$subr:$line: $msg\n";
 		return 1;
 	}
@@ -1320,7 +1317,7 @@ sub syntaxCheck{
 	# http://svn.wikimedia.org/viewvc/mediawiki/trunk/phase3/includes/parser/Parser.php?view=markup&pathrev=74981
 	# ported to perl because phps regexp-handling (\\\\\\\\\\\\\\\\\) sucks.
 	sub php_code_unused{
-		my $self = shift; # $text in orig code
+		my $self = shift;
 		# get wikitext as param
 		my $wikitext = shift; # $text in orig code
 		# building regexp for matching of "[...]"-like links
@@ -1682,6 +1679,20 @@ sub syntaxCheck{
 		}
 	}
 
+	sub time_management{
+		my $self = shift;
+		while($self->{'max_edits_per_min'} != -1 and 
+			@{$self->{'time_stack'}} >= $self->{'max_edits_per_min'}){
+			my $time_diff = time - $self->{'time_stack'}->[0];
+			if($time_diff < 60){
+				$self->msg('  ...waiting '.(60-$time_diff)." seconds") if $self->{'verbosity'} > 0;
+				sleep(60 - $time_diff);
+			}
+			shift @{$self->{'time_stack'}};
+		}
+		return 1;
+	}
+
 	sub title2filename{
 		my $self = shift;
 		my $title = shift;
@@ -1702,20 +1713,6 @@ sub syntaxCheck{
 		$title =~s/ /_/g;
 		my $url_part = uri_escape($title);
 		return $url_part;
-	}
-
-	sub time_management{
-		my $self = shift;
-		while($self->{'max_edits_per_min'} != -1 and 
-			@{$self->{'time_stack'}} >= $self->{'max_edits_per_min'}){
-			my $time_diff = time - $self->{'time_stack'}->[0];
-			if($time_diff < 60){
-				$self->msg('  ...waiting '.(60-$time_diff)." seconds") if $self->{'verbosity'} > 0;
-				sleep(60 - $time_diff);
-			}
-			shift @{$self->{'time_stack'}};
-		}
-		return 1;
 	}
 
 	sub update_edit_filter_index{
@@ -2114,7 +2111,7 @@ my $camelbot = CamelBot->new({
 	#'mw_password' => undef, 
 	'simulation'  => $params->{'test'},
 	'showdiff'    => 0,
-	'verbosity'   => $params->{'verbosity'},
+	'verbosity'   => $params->{'verbose'},
 	'cliparams'   => $params,
 });
 
@@ -2446,6 +2443,7 @@ general options:
 
 mediawiki/wikipedia options:
 
+     --cat-add                 add a given bunch of pages to a given category
  -c, --cat-change              replaces categories 
      --delete                  delete some pre-defined pages
      --download-by-prefix=s    download pages (and used images) with given prefix
@@ -2491,6 +2489,10 @@ camelbot -cl
 =head2 GENERAL
 
 =over 8
+
+=item B<--cat-add>
+
+add a given bunch of pages to a given category.
 
 =item B<--cat-change>, B<-c>
 
@@ -2635,3 +2637,4 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 originally written by seth (see https://github.com/wp-seth/camelbot)
 
 =cut
+
