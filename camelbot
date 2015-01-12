@@ -11,7 +11,7 @@ use Getopt::Long qw(:config bundling); # cli params
 use Pod::Usage;            # cli params help
 
 # global vars
-$main::VERSION = '1.04.20150108';
+$main::VERSION = '1.05.20150112';
 
 # packages: CamelBot, CamelBotIRC
 #
@@ -257,6 +257,7 @@ sub syntaxCheck{
 {
 	package CamelBot;
 	use Data::Dumper;          # for debugging purposes
+	use DBI;                   # db connection
 	use File::Slurp qw(write_file); # read/write files
 	use IPC::Run;              # used for tidy
 	use LWP::UserAgent;        # fast, small web browser
@@ -414,6 +415,101 @@ sub syntaxCheck{
 		#		qr/seth sagt: hallo camelbot!/m, 
 		#		'"camelbot sagt: hallo seth!"');
 		return $changes;
+	}
+
+	sub _db_init{
+		my $self = shift;
+		my $db_file = shift // $ENV{'HOME'}.'/replica.my.cnf';
+		# db connection parameters
+		my $db = {
+			'host' => 'dewiki.labsdb',
+			'name' => 'dewiki_p',
+		};
+		my $opened = open(my $INFILE, '<', $db_file);
+		unless($opened){
+			$self->msg("could not read db conn file: $!", 'error');
+			return 0;
+		}
+		while(my $line = <$INFILE>){
+			$db->{'user'} = $1 if $line =~ /^\s*user='(.*)'/;
+			$db->{'pw'} = $1 if $line =~ /^\s*password='(.*)'/;
+		}
+		close($INFILE);
+		my $dbh = DBI->connect( # db connect
+			'DBI:mysql:'.$db->{'name'}.':'.$db->{'host'}.';mysql_client_found_rows=0',
+			$db->{'user'},
+			$db->{'pw'},
+			{	'RaiseError' => 1,
+				'AutoCommit' => 1,
+				'mysql_enable_utf8' => 1
+			}
+		) or $self->msg('cannot connect to db: '.$DBI::errstr);
+		return $dbh;
+	}
+
+	sub _db_query{
+		my $self  = shift;
+		my $dbh   = shift;
+		my $query = shift;
+		my $return_header = shift // 1;
+		my $sth = $dbh->prepare($query) or $self->msg($dbh->errstr.' query = \''.$query.'\'');
+		return 0 unless defined $sth;
+		$sth->execute;
+		my $names = $sth->{'NAME'}; # or NAME_lc if needed
+		my $rows_ref = $sth->fetchall_arrayref();
+		#$sth->finish;
+		unshift @$rows_ref, $names if $return_header;
+		return $rows_ref;
+	}
+
+	sub _db_simplequery{
+		my $self          = shift;
+		my $db_query      = shift;
+		my $return_header = shift // 1;
+		my $dbh = $self->_db_init() or return undef;
+		#print " <div>";
+		#print Dumper $db_query;
+		#print "</div>\n";
+		if(ref(\$db_query) ne 'SCALAR'){
+			#$db_query->[0] =~ s/\s+/ /g;
+			$db_query->[0] =~ s/^\s+|\s+\z//g;
+			$db_query = sprintf $db_query->[0], map {
+				/^-?(?:\d*\.\d+|\d+\.?)\z/ ? $_ :
+				$dbh->quote($_); #(not defined $_) ? 'NULL'  (will be done by quote, so ensure, using '%s' even on numbers)
+			} @$db_query[1..@$db_query-1];
+		}
+		#print " <div>$db_query</div>\n"; # debug
+		my $db_table = $self->_db_query($dbh, $db_query, $return_header);
+		$dbh->disconnect;
+		return $db_table;
+	}
+
+	#sub db_fetch_recentchanges_detailed{
+	#	my $self = shift;
+	#	my $last_seconds = shift // 60*60*12; # default = last 12 hours
+	#	my $timestamp = strftime("%Y%m%d%H%M%S", gmtime($time()-$last_seconds));
+	#	# check whether token exists:
+	#	my $db_table = db_simplequery([
+	#			'SELECT `rc_timestamp`, `rc_user_text`, `rc_namespace`, `rc_title`, `rc_comment`, `rc_minor`, `rc_bot`, `rc_new`, `rc_cur_id`, `rc_this_oldid`, `rc_last_oldid`, `rc_type`, `rc_source`, `rc_patrolled`, `rc_old_len`, `rc_new_len`, `rc_deleted` FROM `recentchanges` WHERE `rc_timestamp`>%s', $timestamp], 
+	#		!$_return_header);
+	#	if(defined $db_table->[0]){
+	#		my $email = lc $db_table->[0][0];
+	#		my $user_id = $db_table->[0][1];
+	#	}
+	#}
+
+	sub db_fetch_recentchanges{
+		my $self = shift;
+		my $last_seconds = shift // 60*60*12; # default = last 12 hours
+		my $timestamp = strftime("%Y%m%d%H%M%S", gmtime(time()-$last_seconds));
+		# check whether token exists:
+		my $return_header = 1;
+		my $db_table = $self->_db_simplequery(['
+				SELECT `rc_timestamp`, `rc_user_text`, `rc_title` 
+				FROM `recentchanges` 
+				WHERE `rc_timestamp`>%s and `rc_namespace`=0
+		', $timestamp], !$return_header);
+		return $db_table;
 	}
 
 	sub delete_marked_pages{
@@ -1987,6 +2083,27 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		return $self;
 	}
 
+	sub fill_via_db{
+		my $self = shift;
+		my $table = $self->{'camelbot'}->db_fetch_recentchanges(60*60*12);
+		return undef unless defined $table;
+		for my $dataset(@$table){
+			next unless $dataset->[0] =~/^
+				(?<year>[0-9]{4})
+				(?<month>[0-9]{2})
+				(?<mday>[0-9]{2})
+				(?<hour>[0-9]{2})
+				(?<min>[0-9]{2})
+				(?<sec>[0-9]{2})
+				$/x;
+			my $timestamp = timegm(
+				$+{'sec'}, $+{'min'}, $+{'hour'}, $+{'mday'}, $+{'month'}-1, $+{'year'});
+			$self->{'rc_pages_midterm'}->{$dataset->[2]} = $timestamp;
+			$self->{'rc_pages_shortterm'}->{$dataset->[2]} = $timestamp;
+		}
+		return 1;
+	}
+
 	# bot help
 	sub help {
 		my $self = shift;
@@ -1994,11 +2111,12 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 	}
 
 	sub rc_hook{
-		my $self = shift;
+		my $self   = shift;
 		my $rc_msg = shift;
+		my $now    = shift // time;
 		my $camelbot = $self->{'camelbot'};
-		$self->{'rc_pages_midterm'}->{$rc_msg->{'page'}} = time;
-		$self->{'rc_pages_shortterm'}->{$rc_msg->{'page'}} = time;
+		$self->{'rc_pages_midterm'}->{$rc_msg->{'page'}} = $now;
+		$self->{'rc_pages_shortterm'}->{$rc_msg->{'page'}} = $now;
 		$camelbot->msg('irc: ' . 
 			($self->{'rc_pages_midterm'}->{$rc_msg->{'page'}} - $self->{'start_ts'}) .
 			' (#pages in stack: ' . scalar(keys %{$self->{'rc_pages_midterm'}}) . ') ' . 
@@ -2016,7 +2134,6 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		# the $now variable should be defined outside of following loop, because 
 		# otherwise this could cause parallel (redundant?) loops for the same page. maybe
 		# time should be even more precise (Time::HiRes) to prevent from that effect.
-		my $now = time;
 		# after delay transfer pages from $rc_pages_shortterm to @updList_shortterm
 		while(my ($title, $timestamp) = each %{$self->{'rc_pages_shortterm'}}){
 			if($timestamp + $self->{'delay_short'} < $now){
@@ -2089,7 +2206,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 					$rc_msg->{'summary'} !~ /\bCamelBot\b.*\b(?:rückgängig gemacht|revertiert)\b/ and # don't play edit war
 					(index($rc_msg->{'page'}, ':') == -1 or $rc_msg->{'page'} !~ /$self->{'re_namespaces'}/)
 				){
-					$self->rc_hook($rc_msg);
+					$self->rc_hook($rc_msg, time());
 				}
 				#print Dumper $rc_msg;
 				# update edit filter index
@@ -2160,6 +2277,7 @@ if($params->{'irc'}){
 		alias    => 'rc',
 		# no_run => 1,
 	});
+	$bot_rc->fill_via_db();
 	$bot_rc->run();
 	#use POE;
 	#$poe_kernel->run();
