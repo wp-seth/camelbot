@@ -11,7 +11,7 @@ use Getopt::Long qw(:config bundling); # cli params
 use Pod::Usage;            # cli params help
 
 # global vars
-$main::VERSION = '1.05.20150112';
+$main::VERSION = '1.06.20150122';
 
 # packages: CamelBot, CamelBotIRC
 #
@@ -54,8 +54,14 @@ $main::VERSION = '1.05.20150112';
 # sub download_pages_by_prefix
 # 	downloads all pages with the same prefix
 #
-# sub get_abuse_filter_data
-# 	not yet implemented: return some info on abuse filter
+# sub get_abuse_filter_info
+# 	return some info on abuse filter rules
+#
+# sub get_page_info
+# 	get information about a given page (or given pages)
+#
+# sub get_pages_by_prefix
+# 	get all pages and their latest content by prefix
 #
 # sub get_tables_from_wikitext
 # 	tries to return all tables from a given wikitext. (this will fail on tables in 
@@ -63,9 +69,6 @@ $main::VERSION = '1.05.20150112';
 #
 # sub get_user_contribs
 # 	get list of pages edited by user
-#
-# sub get_pages_by_prefix
-# 	get all pages and their latest content by prefix
 #
 # sub is_allowed
 # 	checks whether bot-template is placed on a page and forbids editing
@@ -390,10 +393,11 @@ sub syntaxCheck{
 		# == link fixes ==
 		# === double protocol ===
 		$changes->{'double protocol'} = $self->test_and_replace($text, 
-			qr/(?:http:|(?<=\[))\/\/(https?):?\/\/($self->{'re_url_class'}+)/m, 
+			qr/(?:(?:http:|(?<=\[))\/\/)+(https?):?\/\/($self->{'re_url_class'}+)/m, 
 			'"$1:\/\/$2"');
 		# === technically superfluous external links ===
-		if($page ne 'Hypertext Transfer Protocol Secure'){
+		if($page ne 'Hypertext Transfer Protocol Secure' and 
+			 $page ne 'Hypertext_Transfer_Protocol_Secure'){
 			$changes->{'lf pseudo-external links'} = $self->test_and_replace($text, 
 				qr/\[
 					{1,2}(https?:\/\/de\.wikipedia\.org\/wiki\/[^\]|\x20\x23]++
@@ -642,12 +646,42 @@ sub syntaxCheck{
 		return 1;
 	}
 
-	sub get_abuse_filter_data{
-		my $self = shift;
-		# http://de.wikipedia.org/w/api.php?action=query&list=abusefilters&abfprop=
+	sub get_abuse_filter_info{
+		my $self   = shift;
+		# api.php?action=query&list=abusefilters&abfprop=id|description
+		# &abfstartid=1&abflimit=500
+		# could be extended to 
+		# api.php?action=query&list=abusefilters&abfprop=
 		# id|description|pattern|actions|hits|comments|lasteditor|lastedittime|status|
 		# private&abflimit=500
-		return 0;
+		my $query = {
+			'action'         => 'query',
+			'continue'       => '',
+			'list'           => 'abusefilters', 
+			'abflimit'       => '500',
+			'abfprop'        => 'id|description',
+			'abfstartid'     => '1',
+		};
+		my $mw_options = {'max' => 1};
+		my $finished = 0;
+		my @results;
+		while(!$finished){
+			my $pages = $self->{'mw_api'}->api($query, $mw_options) 
+				or die $self->{'mw_api'}->{'error'}->{'code'}.': ' . 
+					$self->{'mw_api'}->{'error'}->{'details'};
+			if(defined $pages->{'continue'}){
+				while(my ($k, $v) = each(%{$pages->{'continue'}})){
+					$query->{$k} = $v;
+				}
+			}else{
+				$finished = 1;
+			}
+			map {$results[$_->{'id'}] = $_->{'description'}} @{$pages->{'query'}->{'abusefilters'}};
+			#if(defined $pages->{'batchcomplete'}){
+			#	print Dumper $pages->{'batchcomplete'};
+			#}
+		}
+		return \@results;
 	}
 
 	sub get_http_status{
@@ -660,6 +694,28 @@ sub syntaxCheck{
 		);
 		my $response = $lwp->head($url);
 		return $response->code;
+	}
+
+	sub get_page_info{
+		my $self   = shift;
+		my $titles = shift;
+		$titles = join '|', @$titles if ref $titles eq 'ARRAY';
+		# https://de.wikipedia.org/w/api.php?action=query&prop=info&titles=Wikipedia:Bearbeitungsfilter/latest%20topics&continue=
+		my $query = {
+			'action'         => 'query',
+			'continue'       => '',
+			'prop'           => 'info', 
+			'titles'         => $titles, 
+		};
+		my $mw_options = {'max' => 1};
+		my $pages = $self->{'mw_api'}->api($query, $mw_options) 
+			or die $self->{'mw_api'}->{'error'}->{'code'}.': ' . 
+				$self->{'mw_api'}->{'error'}->{'details'};
+		my $page_infos;
+		while(my ($page_id, $page_info) = each %{$pages->{'query'}->{'pages'}}){
+			$page_infos->{$page_info->{'title'}} = $page_info;
+		}
+		return $page_infos;
 	}
 
 	sub get_pages_by_prefix{
@@ -1679,7 +1735,6 @@ sub syntaxCheck{
 		my $regexp_s = shift;
 		my $regexp_r = shift;
 		my $strpos = 0;
-		#my $test = $$text; # for debugging only
 		my $array_of_changes = [];
 		my $numChanges = $$text=~s/$regexp_s/
 			my $match = ${^MATCH};
@@ -1817,6 +1872,7 @@ sub syntaxCheck{
 		my $max_num_talk_pages = 25;
 		my $max_num_days_age = 5;
 		my $edit_filter_name = 'Bearbeitungsfilter';
+		my $lt_page    = 'Wikipedia:'.$edit_filter_name.'/latest topics';
 		# https://de.wikipedia.org/w/api.php?action=query&generator=allpages&gapnamespace=4&gapprefix=Bearbeitungsfilter/&gapfilterredir=nonredirects&gaplimit=500&prop=info|revisions&rvprop=content|timestamp
 		$self->{'mw_api'}->{config}->{api_url} = $self->{'mw_apiurl'};
 		my $pages = [
@@ -1824,31 +1880,50 @@ sub syntaxCheck{
 			@{$self->get_pages_by_prefix({
 				'namespace_id' => 4,
 				'prefix'       => $edit_filter_name.'/',
-				'title_re'     => qr/^Wikipedia:$edit_filter_name\/\d+/,
+				'title_re'     => qr/^Wikipedia:$edit_filter_name\/
+					(?:\d+|Antr\xe4ge$|Fehlerkennungen$|(?:Regelp|P)r\xfcfung$)/x,
 			})}
 		];
+		# last change of latest_topics
+		my $lt_last_change = 
+			$self->get_page_info($lt_page)->{$lt_page}->{'touched'};
 		my $i = 0;
 		my $tables = [{
 			'header' => 1,
 			'body' => [['Regel', "letzte Seiten\xe4nderung", 'Thread', 'letzter Autor']],
 		}];
+		my %new_topics;
 		for my $page(@$pages){
 			#$self->msg(" $page->{'revisions'}->[0]->{'timestamp'}: $page->{title}") if $self->{'verbosity'} > 1;
 			my $npost = $self->newest_post_info($page->{'revisions'}->[0]->{'*'});
 			next unless defined $npost->{'thread'};
 			++$i;
-			# page title
-			$page->{'title'}=~/\D(\d+)$/;
-			$tables->[0]{'body'}[$i][0] = "[[$page->{'title'}|#$1]]";
-			# date of last change
-			my $date_of_last_change = '{{#timel:Y-m-d H:i:s|'.$page->{'revisions'}->[0]->{'timestamp'}.'}}';
+			# date of last change of rule
+			my $date_of_last_change = 
+				'{{#timel:Y-m-d H:i:s|'.$page->{'revisions'}->[0]->{'timestamp'}.'}}';
 			$tables->[0]{'body'}[$i][1] = $date_of_last_change;
+			# page title
+			if($page->{'title'}=~/\D(\d+)$/){
+				$tables->[0]{'body'}[$i][0] = "[[$page->{'title'}|#$1]]";
+				# get description for rule
+			}elsif($page->{'title'}=~/\/([^\/]+)$/){
+				$tables->[0]{'body'}[$i][0] = "[[$page->{'title'}|$1]]";
+			}
+			my $page_short_title = $1 // 'unknown';
 			# thread title
 			my $thread_anchor = "{{subst:anchorencode:$npost->{'thread'}}}";
 			my $thread_title = $npost->{'thread'};
+			# remove links from title
 			$thread_title =~s/\[\[[^|\]]*\|([^|\]]*)\]\]/$1/g;
 			$thread_title =~s/\[\[|\]\]//g;
-			$tables->[0]{'body'}[$i][2] = "[[$page->{'title'}#$thread_anchor|".$thread_title.']]';
+			# add thread title to table
+			$tables->[0]{'body'}[$i][2] = 
+				"[[$page->{'title'}#$thread_anchor|$thread_title]]";
+			# remember newest topics
+			if(not defined $lt_last_change 
+					or $lt_last_change lt $page->{'revisions'}->[0]->{'timestamp'}){
+				$new_topics{$page_short_title} = $thread_title;
+			}
 			# author
 			$tables->[0]{'body'}[$i][3] = $npost->{'author'} eq '' ? '' : 
 				"[[special:contributions/$npost->{'author'}|$npost->{'author'}]]";
@@ -1857,10 +1932,37 @@ sub syntaxCheck{
 				and $i>=$max_num_talk_pages;
 		}
 		#print table2wikitext($tables->[0], {'table' => 'class="wikitable sortable"'}, 1);
-		#now update page
-		my $page    = 'Wikipedia:'.$edit_filter_name.'/latest topics';
-		my $summary = 'index table updated';
-		$self->rebuild_table($page, $tables, $summary);
+		if(keys %new_topics > 0){
+			my $filter_descriptions = $self->get_abuse_filter_info();
+			# build summary
+			my $summary_thread_part = '';
+			my $summary = '('.(
+				join ', ', 
+				map {
+					$summary_thread_part .= $filter_descriptions->[$_] // $new_topics{$_};
+					$summary_thread_part .= '; ';
+					/^[0-9]+$/ ? "#$_" : $_;
+				} # add '#' on rule numbers
+				sort {
+					my $result;
+					if($a =~ /^[0-9]+$/ and $b =~ /^[0-9]+$/){ 
+						# numerical sorting on rule numbers
+						$result = ($a <=> $b);
+					}elsif($a !~ /^[0-9]+$/ and $b !~ /^[0-9]+$/){ 
+						# alphabetical sorting on other pages
+						$result = ($a cmp $b);
+					}else{ 
+						# when sorting rule number against other page, use counter-sort
+						$result = ($b cmp $a);
+					}
+					$result;
+				} 
+				keys %new_topics
+			).'): ';
+			$summary .= substr($summary_thread_part, 0, -2); # delete last '; '
+			# now update page
+			$self->rebuild_table($lt_page, $tables, $summary);
+		}
 	}
 
 	sub update_maintenance_lists{
@@ -2058,6 +2160,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 	package CamelBotIRC;
 	use base qw(Bot::BasicBot); # irc bot
 	use Data::Dumper;           # for debugging purposes
+	use Time::Local;            # timegm
 	$| = 1; # deactivate buffering, so flush all the time
 
 	sub new{
@@ -2098,8 +2201,12 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 				$/x;
 			my $timestamp = timegm(
 				$+{'sec'}, $+{'min'}, $+{'hour'}, $+{'mday'}, $+{'month'}-1, $+{'year'});
+			$dataset->[2] =~ s/_/ /g;
 			$self->{'rc_pages_midterm'}->{$dataset->[2]} = $timestamp;
 			$self->{'rc_pages_shortterm'}->{$dataset->[2]} = $timestamp;
+		}
+		if($self->{'camelbot'}->{'verbosity'} > 1){
+			$self->{'camelbot'}->msg('got '.(0+@$table).' entries.');
 		}
 		return 1;
 	}
@@ -2150,15 +2257,29 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 				push @updList_midterm, $title;
 			}
 		}
+ 		my $numArticles = scalar(@updList_shortterm);
+		if($numArticles >= 100 and $camelbot->{'verbosity'} > 0){
+			$camelbot->msg("starting notification check of $numArticles articles.");
+		}
 		# all pages in @updList_shortterm shall be treated now.
 		for my $page(@updList_shortterm){
 			# notifier on particular edits; there needs to be some delay, because 
 			# otherwise it may occur that the notification is faster than the saving 
 			# process itself.
+			$camelbot->msg("fetch page '$page'.") if $camelbot->{'verbosity'} > 2;
 			$camelbot->notifier($page);
 		}
+		if($numArticles >= 100 and $camelbot->{'verbosity'} > 0){
+			$camelbot->msg("end of notification check of $numArticles articles.");
+		}
 		# all pages in @updList_midterm shall be treated now.
+		my $cnt = 0;
+		$numArticles = scalar(@updList_midterm);
+		if($numArticles >= 100 and $camelbot->{'verbosity'} > 0){
+			$camelbot->msg("starting mid term checks of $numArticles articles.");
+		}
 		for my $page(@updList_midterm){
+			$camelbot->msg("fetch page '$page' (".(++$cnt).").") if $camelbot->{'verbosity'} > 2;
 			my $text = $camelbot->{'mw_bot'}->get_text($page);
 			if(defined $text and $camelbot->is_allowed(\$text, $page)){
 				my $text_bak = $text;
@@ -2176,6 +2297,9 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			}else{
 				$camelbot->msg("could not fetch page '$page'. maybe deleted already", 'notice') if $camelbot->{'verbosity'} > 1;
 			}
+		}
+		if($numArticles >= 100 and $camelbot->{'verbosity'} > 0){
+			$camelbot->msg("end of mid term checks of $numArticles articles.");
 		}
 	}
 
