@@ -11,9 +11,9 @@ use Getopt::Long qw(:config bundling); # cli params
 use Pod::Usage;            # cli params help
 
 # global vars
-$main::VERSION = '1.06.20150122';
+$main::VERSION = '1.07.20150215';
 
-# packages: CamelBot, CamelBotIRC
+# packages: CamelBot, CamelBotRC, CamelBotIRC
 #
 # functions
 # =========
@@ -42,6 +42,24 @@ $main::VERSION = '1.06.20150122';
 # sub cleanup_wiki_page
 # 	standard cleaning up
 #
+# sub convert_ns
+# 	converts namespace id to its name or vice versa
+#
+# sub _db_init
+#		init db connection
+#
+# sub _db_query
+#		send query to db
+#
+# sub _db_simplequery
+#		wrapper for simple db queries
+#
+# sub db_fetch_recentchanges
+#		use db to get recent changes for a given time period
+#
+# sub delete_marked_pages
+#		delete pages that are in a special category
+# 
 # sub delete_wiki_page
 # 	deletes a wiki page
 #
@@ -56,6 +74,9 @@ $main::VERSION = '1.06.20150122';
 #
 # sub get_abuse_filter_info
 # 	return some info on abuse filter rules
+#
+# sub get_namespace_id
+# 	return namespace id of a given page
 #
 # sub get_page_info
 # 	get information about a given page (or given pages)
@@ -185,10 +206,10 @@ sub syntaxCheck{
 		'delete'             => 0,     # delete pages
 		'download-by-prefix' => undef, # download pages by prefix
 		'http-status'        => undef, # check reachability of url
-		'irc'                => 0,     # start irc bot
 		'link-replacement'   => 0,     # link replacing
 		'minor'              => 1,     # mark as minor
 		'parse'              => undef, # wikitext-file to parse
+		'rc-monitoring'      => undef, # start rc monitoring via irc or db
 		'save-as-html'       => undef, # download pages and save as html pages
 		'section'            => undef, # section in wikipage
 		'text-replacement'   => 0,     # text replacing
@@ -211,10 +232,11 @@ sub syntaxCheck{
 		"delete",
 		"download-by-prefix=s",
 		"http-status=s",
-		"irc",
+		"irc" => sub { $params{'rc-monitoring'} = 'irc';},
 		"link-replacement|l",
 		"minor!",
 		"parse=s",
+		"rc-monitoring=s",
 		"save-as-html=s",
 		"section=s",
 		"text-replacement",
@@ -259,19 +281,19 @@ sub syntaxCheck{
 
 {
 	package CamelBot;
-	use Data::Dumper;          # for debugging purposes
-	use DBI;                   # db connection
+	use Data::Dumper;           # for debugging purposes
+	use DBI;                    # db connection
 	use File::Slurp qw(write_file); # read/write files
-	use IPC::Run;              # used for tidy
-	use LWP::UserAgent;        # fast, small web browser
-	use MediaWiki::Bot;        # bot for mediawiki, uses mediawiki-api-interface
-	use POSIX qw/strftime/;    # format timestamp
-	use Term::ReadKey;         # used for user input
+	use IPC::Run;               # used for tidy
+	use LWP::UserAgent;         # fast, small web browser
+	use MediaWiki::Bot;         # bot for mediawiki, uses mediawiki-api-interface
+	use POSIX qw/strftime/;     # format timestamp
+	use Term::ReadKey;          # used for user input
 	use Text::Diff;
-	use Time::Local;           # timegm
-	use Tk::DiffText;          # graphical diff tool
-	use URI::Escape;           # uri_unescape
-	use WWW::Mechanize;        # big web browser
+	use Time::Local;            # timegm
+	use Tk::DiffText;           # graphical diff tool
+	use URI::Escape;            # uri_unescape
+	use WWW::Mechanize;         # big web browser
 
 	sub new{
 		my $class = shift; 
@@ -279,29 +301,31 @@ sub syntaxCheck{
 		my $current_year = strftime("%Y", gmtime());
 		my $self = bless {
 			# 0 = don't ask user; 1  = ask user for every action
-			'ask_user'     => $params->{'ask_user'} // 0, 
+			'ask_user'       => $params->{'ask_user'} // 0, 
 			# maximum number of edits per minute (-1 = inf)
 			'max_edits_per_min' => $params->{'max_edits_per_min'} // 5, 
-			'minor'        => $params->{'minor'} // 1, # 0 = non-minor; 1 = minor
-			'mw_api'       => undef, # instance of MediaWiki::API
-			'mw_apiurl'    => undef, # url of mw_api
-			'mw_bot'       => undef, # instance of MediaWiki::Bot
-			#'mw_password'  => $mw_password, # not needed permanently
-			'mw_username'  => $params->{'mw_username'},
-			're_url_class' => qr/[^\]\[<>"'\x00-\x20\x7F)]|\)(?!\s)/,
-			're_maintenance'  => {
+			'minor'          => $params->{'minor'} // 1, # 0 = non-minor; 1 = minor
+			'mw_api'         => undef, # instance of MediaWiki::API
+			'mw_apiurl'      => undef, # url of mw_api
+			'mw_bot'         => undef, # instance of MediaWiki::Bot
+			#'mw_password'    => $mw_password, # not needed permanently
+			'mw_username'    => $params->{'mw_username'},
+			're_editfilter'  => qr/^Wikipedia:Bearbeitungsfilter\/
+					(?:\d+|Antr\xe4ge$|Fehlerkennungen$|(?:Regelp|P)r\xfcfung$)/x,
+			're_url_class'   => qr/[^\]\[<>"'\x00-\x20\x7F)]|\)(?!\s)/,
+			're_maintenance' => {
 				'ASIN'      => qr/\bASIN[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/,
 				'cat dead'  => qr/\[\[\s*(?i:category|kategorie):\s*[Gg]estorben[\s|_]$current_year\s*(?:\|[^\]]*)?\]\]/,
 			},
 			# 0 = don't show diff; 1 = show a diff, 2 = gui
-			'showdiff'     => $params->{'showdiff'} // 0, 
+			'showdiff'       => $params->{'showdiff'} // 0, 
 			# 0 = do real edits; 1 = simulate only
-			'simulation'   => $params->{'simulation'} // 0, 
-			'time_stack'   => [], # needed for edit/min constraint
+			'simulation'     => $params->{'simulation'} // 0, 
+			'time_stack'     => [], # needed for edit/min constraint
 			# user answer initially is "no"
-			'user_answer'  => $params->{'user_answer'} // '', 
-			'verbosity'    => $params->{'verbosity'} // 1,
-			'cliparams'    => $params->{'cliparams'},
+			'user_answer'    => $params->{'user_answer'} // '', 
+			'verbosity'      => $params->{'verbosity'} // 1,
+			'cliparams'      => $params->{'cliparams'},
 		}, $class;
 		$self->login($params->{'mw_password'}); # may change mw_username!
 		return $self;
@@ -374,7 +398,7 @@ sub syntaxCheck{
 		my $urlstring = shift;
 		my $ok = 1;
 		if($$urlstring =~ /^https?:\/\//){
-			my $url = $$urlstring;
+			my $url = $$urlstring; #for vim: { {
 			if($$pretext =~ /url\s*=\s*$/ and $$urlstring =~ /^([^|}]+)[|}]/){
 				$url = $1;
 			}
@@ -419,6 +443,24 @@ sub syntaxCheck{
 		#		qr/seth sagt: hallo camelbot!/m, 
 		#		'"camelbot sagt: hallo seth!"');
 		return $changes;
+	}
+
+	sub convert_ns{
+		my $self = shift;
+		my $ns = shift;
+		my $converted;
+		unless(defined $self->{'namespaces'}){
+			# get namespaces
+			$self->{'namespaces'} = {$self->{'mw_bot'}->get_namespace_names()};
+		}
+		if($ns =~ /^[0-9]+$/){
+			$converted = $self->{'namespaces'}->{$ns};
+		}else{
+			my %rev_ns = reverse(%{$self->{'namespaces'}});
+			$converted = $rev_ns{$ns};
+		}
+		$self->msg("could not resolve '$ns'", 'error') unless defined $converted;
+		return $converted;
 	}
 
 	sub _db_init{
@@ -504,15 +546,34 @@ sub syntaxCheck{
 
 	sub db_fetch_recentchanges{
 		my $self = shift;
-		my $last_seconds = shift // 60*60*12; # default = last 12 hours
-		my $timestamp = strftime("%Y%m%d%H%M%S", gmtime(time()-$last_seconds));
+		my $timestamp_begin = shift; # format yyyymmddhhmmss
+		my $timestamp_end   = shift; # format yyyymmddhhmmss
+		unless(defined $timestamp_begin){
+			# default = last 12 hours
+			$timestamp_begin = strftime("%Y%m%d%H%M%S", gmtime(time()-60*60*12));
+		}
 		# check whether token exists:
 		my $return_header = 1;
-		my $db_table = $self->_db_simplequery(['
-				SELECT `rc_timestamp`, `rc_user_text`, `rc_title` 
-				FROM `recentchanges` 
-				WHERE `rc_timestamp`>%s and `rc_namespace`=0
-		', $timestamp], !$return_header);
+		my $db_table;
+		my $rows = '`rc_timestamp`, `rc_user_text`, `rc_namespace`, `rc_title`, `rc_comment`, `rc_old_len`, `rc_new_len`';
+		if(defined $timestamp_end){
+			$db_table = $self->_db_simplequery(['
+					SELECT '.$rows.'
+					FROM `recentchanges` 
+					WHERE `rc_timestamp`>%s
+						AND `rc_timestamp`<%s
+						AND `rc_namespace`=0
+					ORDER BY `rc_timestamp`
+			', $timestamp_begin, $timestamp_end], !$return_header);
+		}else{
+			$db_table = $self->_db_simplequery(['
+					SELECT '.$rows.'
+					FROM `recentchanges` 
+					WHERE `rc_timestamp`>%s 
+						AND `rc_namespace`=0
+					ORDER BY `rc_timestamp`
+			', $timestamp_begin], !$return_header);
+		}
 		return $db_table;
 	}
 
@@ -696,6 +757,16 @@ sub syntaxCheck{
 		return $response->code;
 	}
 
+	sub get_namespace_id{
+		my $self = shift;
+		my $page = shift;
+		my $ns_id = 0;
+		if($page =~ /^([^:]+):/){
+			$ns_id = $self->convert_ns($1);
+		}
+		return $ns_id;
+	}
+
 	sub get_page_info{
 		my $self   = shift;
 		my $titles = shift;
@@ -825,7 +896,7 @@ sub syntaxCheck{
 		my $self = shift;
 		my $textref = shift;
 		my $page = shift // 'unknown';
-		my $allowed = 1;
+		my $allowed = 1; # for vim: { { { { { { { {
 		if($$textref =~ /{{[nN]obots}}|
 			[bB]ots\s*+\|\s*+(?:
 				deny\s*+=\s*+(?:
@@ -1433,7 +1504,7 @@ sub syntaxCheck{
 			\cC03([^\cC]*)\cC\x20\cC5\*\cC\x20 # user
 			(\(\cB?[+-]\d+\cB?\)|)\x20         # diffbytes
 			\cC10(.*[^\cC]|)\cC?\z/x){         # summary
-			$parsed_msg{'page'} = $1;
+			$parsed_msg{'page_with_ns'} = $1;
 			$parsed_msg{'flags'} = $2;
 			$parsed_msg{'url'} = $3;
 			$parsed_msg{'user'} = $4;
@@ -1442,6 +1513,10 @@ sub syntaxCheck{
 			if($parsed_msg{'diffbytes'} =~ /^\(\cB?([+-]\d+)\cB?\)$/){
 				$parsed_msg{'diffbytes'} = $1;
 			}
+			$parsed_msg{'ns_id'} = $self->get_namespace_id($parsed_msg{'page_with_ns'});
+			$parsed_msg{'page'} = $parsed_msg{'page_with_ns'};
+			$parsed_msg{'page'} =~ s/^[^:]+:// if $parsed_msg{'ns_id'} != 0;
+			$parsed_msg{'timestamp'} = time();
 			print Data::Dumper->Dump([\%parsed_msg]) if $self->{'verbosity'} > 4;
 		}else{
 			$self->msg($msg) if $self->{'verbosity'} > 1;
@@ -1880,8 +1955,7 @@ sub syntaxCheck{
 			@{$self->get_pages_by_prefix({
 				'namespace_id' => 4,
 				'prefix'       => $edit_filter_name.'/',
-				'title_re'     => qr/^Wikipedia:$edit_filter_name\/
-					(?:\d+|Antr\xe4ge$|Fehlerkennungen$|(?:Regelp|P)r\xfcfung$)/x,
+				'title_re'     => $self->{'re_editfilter'},
 			})}
 		];
 		# last change of latest_topics
@@ -1944,9 +2018,11 @@ sub syntaxCheck{
 					/^[0-9]+$/ ? "#$_" : $_;
 				} # add '#' on rule numbers
 				sort {
+					# todo: there's some bug inhere. strings are recognized as numbers?
 					my $result;
 					if($a =~ /^[0-9]+$/ and $b =~ /^[0-9]+$/){ 
 						# numerical sorting on rule numbers
+						# print "$a X $b\n" if $a !~ /^[0-9]+$/ or $b !~ /^[0-9]+$/;
 						$result = ($a <=> $b);
 					}elsif($a !~ /^[0-9]+$/ and $b !~ /^[0-9]+$/){ 
 						# alphabetical sorting on other pages
@@ -2081,6 +2157,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 				# 'filename' => $filename_src,
 				# 'comment'  => $summary,
 				# 'file'     => [undef, $filename_dest, 'Content'=>$$data],
+				# })
 				$self->{'mw_api'}->upload({
 						'data'    => $$data,
 						'summary' => $summary,
@@ -2157,8 +2234,8 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 }
 
 {
-	package CamelBotIRC;
-	use base qw(Bot::BasicBot); # irc bot
+	package CamelBotRC;
+	use POSIX qw/strftime/;     # format timestamp
 	use Data::Dumper;           # for debugging purposes
 	use Time::Local;            # timegm
 	$| = 1; # deactivate buffering, so flush all the time
@@ -2166,29 +2243,31 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 	sub new{
 		my $class    = shift; 
 		my $camelbot = shift;
-		my $params   = shift;
-		my $self = $class->SUPER::new(%$params);
-		$self->{'camelbot'} = $camelbot;
+		my $self = bless {
+			'camelbot'             => $camelbot,
+			're_edit_filter_name'  => qr/(?:Bearbeitung|Missbrauch)sfilter/,
+			'rc_pages_shortterm'   => {},    # rc pages to check
+			'rc_pages_midterm'     => {},    # rc pages to check
+			'rc_pages_maintenance' => {},    # rc special pages to check
+			'delay'                => 30*60, # seconds
+			'delay_short'          => 10,    # seconds
+			'start_ts'             => time,  # only for debugging purposes
+			'last_update_of_editfilter_index' => 0,
+			're_namespaces'        => (join '|', grep {$_ ne ''} # get all namespaces!=0
+				values {$camelbot->{'mw_bot'}->get_namespace_names()}),
+		}, $class;
+		$self->{'re_namespaces'} = qr/^$self->{'re_namespaces'}:/;
 		# initially update and fetch maintenance lists 
 		$camelbot->update_maintenance_lists(
 			undef, undef, 'all_types', $self->{'rc_pages_maintenance'});
-		$self->{'re_edit_filter_name'} = qr/(?:Bearbeitung|Missbrauch)sfilter/;
-		$self->{'rc_pages_shortterm'} = {};   # rc pages to check
-		$self->{'rc_pages_midterm'} = {};     # rc pages to check
-		$self->{'rc_pages_maintenance'} = {}; # rc special pages to check
-		$self->{'delay'} = 30*60; # seconds
-		$self->{'delay_short'} = 9; # seconds
-		$self->{'start_ts'} = time; # only for debugging purposes
-		# get all namespaces except 0
-		$self->{'re_namespaces'} = join '|', grep {$_ ne ''} 
-			values {$camelbot->{'mw_bot'}->get_namespace_names()}; 
-		$self->{'re_namespaces'} = qr/^$self->{'re_namespaces'}:/;
 		return $self;
 	}
 
-	sub fill_via_db{
+	sub get_rc_via_db{
 		my $self = shift;
-		my $table = $self->{'camelbot'}->db_fetch_recentchanges(60*60*12);
+		my $timestamp_begin = strftime("%Y%m%d%H%M%S", gmtime(time()-60*60*12));
+		my $table = $self->{'camelbot'}->db_fetch_recentchanges($timestamp_begin);
+		my $rc_pages = [];
 		return undef unless defined $table;
 		for my $dataset(@$table){
 			next unless $dataset->[0] =~/^
@@ -2202,45 +2281,34 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			my $timestamp = timegm(
 				$+{'sec'}, $+{'min'}, $+{'hour'}, $+{'mday'}, $+{'month'}-1, $+{'year'});
 			$dataset->[2] =~ s/_/ /g;
-			$self->{'rc_pages_midterm'}->{$dataset->[2]} = $timestamp;
-			$self->{'rc_pages_shortterm'}->{$dataset->[2]} = $timestamp;
+			#$self->{'rc_pages_midterm'}->{$dataset->[2]} = $timestamp;
+			#$self->{'rc_pages_shortterm'}->{$dataset->[2]} = $timestamp;
+			my %rc_msg;
+			$rc_msg{'timestamp'} = $dataset->[0];
+			$rc_msg{'user'}      = $dataset->[1];
+			$rc_msg{'ns_id'}     = $dataset->[2];
+			$rc_msg{'page'}      = $dataset->[3];
+			$rc_msg{'summary'}   = $dataset->[4];
+			$rc_msg{'page_with_ns'} = $dataset->[2] == 0 ? $dataset->[3] : 
+				$self->{'camelbot'}->convert_ns($dataset->[2]) . ':' . $dataset->[3];
+			#$rc_msg{'flags'}     = $dataset->[];
+			#$rc_msg{'url'}       = $dataset->[];
+			$rc_msg{'diffbytes'} = $dataset->[6] - $dataset->[5];
+			push @$rc_pages, \%rc_msg;
 		}
 		if($self->{'camelbot'}->{'verbosity'} > 1){
 			$self->{'camelbot'}->msg('got '.(0+@$table).' entries.');
 		}
-		return 1;
+		return $rc_pages;
 	}
 
-	# bot help
-	sub help {
-		my $self = shift;
-		return 'i\'m just listening to recent changes in w:de and sometimes those changes trigger some of my functions. if you have any questions, please ask my master at https://de.wikipedia.org/wiki/user_talk:lustiger_seth.';
-	}
-
-	sub rc_hook{
+	sub handle_rc_pages{
 		my $self   = shift;
-		my $rc_msg = shift;
-		my $now    = shift // time;
+		my $now    = time;
 		my $camelbot = $self->{'camelbot'};
-		$self->{'rc_pages_midterm'}->{$rc_msg->{'page'}} = $now;
-		$self->{'rc_pages_shortterm'}->{$rc_msg->{'page'}} = $now;
-		$camelbot->msg('irc: ' . 
-			($self->{'rc_pages_midterm'}->{$rc_msg->{'page'}} - $self->{'start_ts'}) .
-			' (#pages in stack: ' . scalar(keys %{$self->{'rc_pages_midterm'}}) . ') ' . 
-			$rc_msg->{'page'} . ', editor = ' . $rc_msg->{'user'}
-		) if $camelbot->{'verbosity'} > 1;
-		while(my ($type, $pages) = each %{$self->{'rc_pages_maintenance'}}){
-			if(exists $pages->{$rc_msg->{'page'}}){
-				$camelbot->update_maintenance_lists($rc_msg->{'page'}, undef, $type, 
-					$self->{'rc_pages_maintenance'});
-			}
-		}
 		# delayed clean up:
 		my @updList_midterm;
 		my @updList_shortterm;
-		# the $now variable should be defined outside of following loop, because 
-		# otherwise this could cause parallel (redundant?) loops for the same page. maybe
-		# time should be even more precise (Time::HiRes) to prevent from that effect.
 		# after delay transfer pages from $rc_pages_shortterm to @updList_shortterm
 		while(my ($title, $timestamp) = each %{$self->{'rc_pages_shortterm'}}){
 			if($timestamp + $self->{'delay_short'} < $now){
@@ -2257,7 +2325,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 				push @updList_midterm, $title;
 			}
 		}
- 		my $numArticles = scalar(@updList_shortterm);
+		my $numArticles = scalar(@updList_shortterm);
 		if($numArticles >= 100 and $camelbot->{'verbosity'} > 0){
 			$camelbot->msg("starting notification check of $numArticles articles.");
 		}
@@ -2303,6 +2371,76 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		}
 	}
 
+	sub put_new_rc{
+		my $self   = shift;
+		my $rc_msg = shift;
+		my $now    = shift // time;
+		my $term   = shift // {'shortterm'=>1, 'midterm'=>1};
+		my $camelbot = $self->{'camelbot'};
+		if(# $rc_msg->{'user'} eq 'Lustiger seth' or # for debugging only
+			$rc_msg->{'user'} ne $camelbot->{'mw_username'} and # don't track own edit
+			$rc_msg->{'summary'} !~ /\bCamelBot\b.*\b(?:rückgängig gemacht|revertiert)\b/# and # don't play edit war
+			#$rc_msg->{'ns_id'} == 0
+		){
+			$self->{'rc_pages_midterm'}->{$rc_msg->{'page_with_ns'}} = $now if $term->{'midterm'};
+			$self->{'rc_pages_shortterm'}->{$rc_msg->{'page_with_ns'}} = $now if $term->{'shortterm'};
+			$camelbot->msg('new rc: ' . 
+				($self->{'rc_pages_midterm'}->{$rc_msg->{'page_with_ns'}} - $self->{'start_ts'}) .
+				' (#pages in stack: ' . scalar(keys %{$self->{'rc_pages_midterm'}}) . ') ' . 
+				$rc_msg->{'page_with_ns'} . ', editor = ' . $rc_msg->{'user'}
+			) if $camelbot->{'verbosity'} > 1;
+			# check if page is on a maintenance list
+			while(my ($type, $pages) = each %{$self->{'rc_pages_maintenance'}}){
+				if(exists $pages->{$rc_msg->{'page_with_ns'}}){
+					$camelbot->update_maintenance_lists($rc_msg->{'page_with_ns'}, undef, $type, 
+						$self->{'rc_pages_maintenance'});
+				}
+			}
+			$self->handle_rc_pages();
+		}
+		# update edit filter index
+		if($rc_msg->{'ns_id'} == 4 and $rc_msg->{'page'} =~ /^$self->{'re_edit_filter_name'}\//
+				and $self->{'last_update_of_editfilter_index'} < $now){
+			$camelbot->update_edit_filter_index();
+			$self->{'last_update_of_editfilter_index'} = time;
+		}
+	}
+
+	sub db_rc_monitoring{
+		my $self = shift;
+		my $rc_pages = $self->get_rc_via_db();
+		#if(defined $rc_pages){
+		#}
+		# todo: under construction
+		for my $rc_msg(@$rc_pages){
+			$self->put_new_rc($rc_msg, $rc_msg->{'timestamp'}, 'midterm');
+		}
+	}
+}
+
+{
+	package CamelBotIRC;
+	use parent qw(Bot::BasicBot); # irc bot
+	use Data::Dumper;           # for debugging purposes
+	use Time::Local;            # timegm
+	$| = 1; # deactivate buffering, so flush all the time
+
+	sub new{
+		my $class    = shift; 
+		my $camelbot = shift;
+		my $params   = shift;
+		my $self = $class->SUPER::new(%$params);
+		$self->{'rc'} = CamelBotRC->new($camelbot);
+		$self->{'camelbot'} = $camelbot;
+		return $self;
+	}
+
+	# bot help
+	sub help {
+		my $self = shift;
+		return 'i\'m just listening to recent changes in w:de and sometimes those changes trigger some of my functions. if you have any questions, please ask my master at https://de.wikipedia.org/wiki/user_talk:lustiger_seth.';
+	}
+
 	# bot handler: if somebody said something
 	sub said {
 		my ($self, $message) = @_;
@@ -2325,18 +2463,25 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			if($message->{who} =~/^rc-\w+$/){
 				# parse rc message
 				my $rc_msg = $camelbot->parse_rc($message->{body});
-				if(# $rc_msg->{'user'} eq 'Lustiger seth' or # for debugging only
-					$rc_msg->{'user'} ne $camelbot->{'mw_username'} and # don't track own edit
-					$rc_msg->{'summary'} !~ /\bCamelBot\b.*\b(?:rückgängig gemacht|revertiert)\b/ and # don't play edit war
-					(index($rc_msg->{'page'}, ':') == -1 or $rc_msg->{'page'} !~ /$self->{'re_namespaces'}/)
-				){
-					$self->rc_hook($rc_msg, time());
-				}
-				#print Dumper $rc_msg;
-				# update edit filter index
-				if($rc_msg->{'page'} =~ /^Wikipedia:$self->{'re_edit_filter_name'}\/\d+$/){
-					$camelbot->update_edit_filter_index();
-				}
+				$self->{'rc'}->put_new_rc($rc_msg, time());
+				#if(# $rc_msg->{'user'} eq 'Lustiger seth' or # for debugging only
+				#	$rc_msg->{'user'} ne $camelbot->{'mw_username'} and # don't track own edit
+				#	$rc_msg->{'summary'} !~ /\bCamelBot\b.*\b(?:rückgängig gemacht|revertiert)\b/ and # don't play edit war
+				#	$rc_msg->{'ns_id'} == 0
+				#){
+				#	$self->forkit(
+				#		run => \&{$self->put_new_rc}, 
+				#		channel => $message->{'channel'}, 
+				#		#handler => \&_fork_said_handler,
+				#		body => $self,
+				#		arguments => [$rc_msg, time()],
+				#	);
+				#}
+				##print Dumper $rc_msg;
+				## update edit filter index
+				#if($rc_msg->{'ns_id'} == 4 and $rc_msg->{'page'} =~ /^$self->{'rc'}->{'re_edit_filter_name'}\//
+				#	$camelbot->update_edit_filter_index();
+				#}
 			}
 		}
 	}
@@ -2387,24 +2532,6 @@ if(defined $params->{'http-status'}){
 		$camelbot->msg($response_code.' '.$url);
 		sleep 5;
 	}
-}
-
-if($params->{'irc'}){
-	$camelbot->update_edit_filter_index();
-	my $username = 'CamelBot';
-	my $bot_rc = CamelBotIRC->new($camelbot,{
-		server   => 'irc.wikimedia.org',
-		channels => ['#de.wikipedia'],
-		nick     => $username,
-		username => $username,
-		name     => $username,
-		alias    => 'rc',
-		# no_run => 1,
-	});
-	$bot_rc->fill_via_db();
-	$bot_rc->run();
-	#use POE;
-	#$poe_kernel->run();
 }
 
 if($params->{'link-replacement'}){
@@ -2486,6 +2613,33 @@ if(defined $params->{'parse'}){
 	$html_cleaned=~s/<\/body>\n<\/html>\s*$//sg;
 	# write result
 	write_file($htmlfilename, {binmode => ':utf8'}, $html_cleaned);
+}
+
+if($params->{'rc-monitoring'}){
+	if($params->{'rc-monitoring'} eq 'irc'){
+		$camelbot->update_edit_filter_index();
+		my $username = 'CamelBot_';
+		my $bot_irc = CamelBotIRC->new($camelbot,{
+			server   => 'irc.wikimedia.org',
+			channels => ['#de.wikipedia'],
+			nick     => $username,
+			username => $username,
+			name     => $username,
+			alias    => 'rc',
+			# no_run => 1,
+		});
+		#$bot_irc->get_rc_via_db();
+		$bot_irc->run();
+		#use POE;
+		#$poe_kernel->run();
+	}elsif($params->{'rc-monitoring'} eq 'db'){
+		#$camelbot->update_edit_filter_index();
+		my $camelbot_rc = CamelBotRC->new($camelbot);
+		$camelbot_rc->db_rc_monitoring();
+	}else{
+		$camelbot->msg('not implemented', 'error');
+	}
+	$camelbot->msg('leaving');
 }
 
 if(defined $params->{'save-as-html'}){
@@ -2689,12 +2843,15 @@ mediawiki/wikipedia options:
  -c, --cat-change              replaces categories 
      --delete                  delete some pre-defined pages
      --download-by-prefix=s    download pages (and used images) with given prefix
-     --irc                     start irc bot (for w:de)
+     --irc                     short for --rc-monitoring=irc
  -l, --link-replacement        replaces links 
      --text-replacement        replaces text 
  -m, --minor=[01]              mark edit(s) as minor (1) or not (0), default = 1
      --parse=s                 parses wikitext from file and saves result as new 
                                 file
+     --rc-monitoring=s         start monitoring of recent changes (in w:de) via
+                                irc - an irc bot
+                                db  - an db connection
      --save_as_html=s          saves a given wiki page as local html-file
  -t, --test                    don't change anything, just print possible changes
      --update-editfilter-index update edit filter index (at w:de)
@@ -2756,7 +2913,7 @@ contains spaces, they are treated as separators between multiple URLs.
 
 =item B<--irc>
 
-start an irc bot. this will only be useful in de-wikipedia.
+same as B<--rc-monitoring>=irc
 
 =item B<--link-replacement>, B<-l>
 
@@ -2770,6 +2927,11 @@ mark edit(s) as minor or not, default = B<--minor>.
 
 parses wikitext from file and saves result to file with same name but with 
 extension .html.
+
+=item B<--rc-monitoring>=I<type>
+
+start monitoring of recent changes (in de-wikipedia) via an irc bot (I<type>==irc) 
+or a db (I<type>==db) connection to a "real time" db.
 
 =item B<--save-as-html>=I<pagename>
 
