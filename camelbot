@@ -11,7 +11,7 @@ use Getopt::Long qw(:config bundling); # cli params
 use Pod::Usage;            # cli params help
 
 # global vars
-$main::VERSION = '1.08.20150216';
+$main::VERSION = '1.09.20150217';
 
 # packages: CamelBot, CamelBotRC, CamelBotIRC
 #
@@ -572,8 +572,8 @@ sub syntaxCheck{
 			$db_table = $self->_db_simplequery(['
 					SELECT '.$rows.'
 					FROM `recentchanges` 
-					WHERE `rc_timestamp`>%s
-						AND `rc_timestamp`<%s
+					WHERE `rc_timestamp`>=%s
+						AND `rc_timestamp`<=%s
 						AND `rc_namespace`=0
 					ORDER BY `rc_timestamp`
 			', $timestamp_begin, $timestamp_end], !$return_header);
@@ -581,7 +581,7 @@ sub syntaxCheck{
 			$db_table = $self->_db_simplequery(['
 					SELECT '.$rows.'
 					FROM `recentchanges` 
-					WHERE `rc_timestamp`>%s 
+					WHERE `rc_timestamp`>=%s 
 						AND `rc_namespace`=0
 					ORDER BY `rc_timestamp`
 			', $timestamp_begin], !$return_header);
@@ -1681,7 +1681,7 @@ sub syntaxCheck{
 				}
 			}
 		}
-		$self->msg($text) if $self->{'simulation'} and $self->{'verbosity'} > 0;
+		$self->msg($text) if $self->{'simulation'} and $self->{'verbosity'} > 1;
 		$self->time_management();
 		$self->save_wiki_page($page, $summary, \$text, \$text_bak);
 	}
@@ -1721,6 +1721,12 @@ sub syntaxCheck{
 					});
 				}else{
 					$self->{'user_answer'} = '';
+				}
+			}else{
+				my $page = $page_utf8;
+				utf8::encode($page);
+				if($self->{'verbosity'} > 0){
+					$self->msg("simulation of saving of page [[$page]] with summary '$summary'");
 				}
 			}
 		}
@@ -2277,7 +2283,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 
 	sub get_rc_via_db{
 		my $self = shift;
-		my $timestamp_begin = strftime("%Y%m%d%H%M%S", gmtime(time()-60*60*12));
+		my $timestamp_begin = shift // strftime("%Y%m%d%H%M%S", gmtime(time()-60*60*12));
 		my $table = $self->{'camelbot'}->db_fetch_recentchanges($timestamp_begin);
 		my $rc_pages = [];
 		return undef unless defined $table;
@@ -2421,12 +2427,42 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 
 	sub db_rc_monitoring{
 		my $self = shift;
-		my $rc_pages = $self->get_rc_via_db();
-		#if(defined $rc_pages){
-		#}
-		# todo: under construction
-		for my $rc_msg(@$rc_pages){
-			$self->put_new_rc($rc_msg, $rc_msg->{'timestamp'}, 'midterm');
+		my $rc_pages = [];
+		my $last_check = 0;
+		my $camelbot = $self->{'camelbot'};
+		my $sleep_delay = 30; # seconds
+		while(1){
+			if($last_check + $sleep_delay > time){
+				my $sleep_time = $sleep_delay + $last_check - time;
+				$camelbot->msg("sleep $sleep_time seconds") if $camelbot->{verbosity} > 1;
+				sleep($sleep_time);
+			}
+			$last_check = time;
+			$camelbot->msg('get new rc pages from db') if $camelbot->{verbosity} > 1;
+			my $new_rc_pages = $self->get_rc_via_db(
+				@$rc_pages > 0 ? $rc_pages->[-1]->{'timestamp'} : undef
+			);
+			# delete multiple entries of same page
+			$camelbot->msg('delete multiple entries') if $camelbot->{verbosity} > 1;
+			my %dbl_counter;
+			map {$dbl_counter{$_->{'page_with_ns'}} = 1} @$rc_pages;
+			map {
+				if(defined $dbl_counter{$_->{'page_with_ns'}}){
+					++$dbl_counter{$_->{'page_with_ns'}};
+				}else{
+					$dbl_counter{$_->{'page_with_ns'}} = 1;
+				}
+			} @$new_rc_pages;
+			$rc_pages = [
+				grep {
+					--$dbl_counter{$_->{'page_with_ns'}} ==0 
+				} (@$rc_pages, @$new_rc_pages)
+			];
+			# todo: under construction
+			for my $rc_msg(@$rc_pages){
+				print Dumper $rc_msg;
+				$self->put_new_rc($rc_msg, $rc_msg->{'timestamp'}, {'midterm'=>1});
+			}
 		}
 	}
 }
