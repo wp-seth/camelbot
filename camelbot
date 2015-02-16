@@ -11,7 +11,7 @@ use Getopt::Long qw(:config bundling); # cli params
 use Pod::Usage;            # cli params help
 
 # global vars
-$main::VERSION = '1.07.20150215';
+$main::VERSION = '1.08.20150216';
 
 # packages: CamelBot, CamelBotRC, CamelBotIRC
 #
@@ -424,8 +424,8 @@ sub syntaxCheck{
 			 $page ne 'Hypertext_Transfer_Protocol_Secure'){
 			$changes->{'lf pseudo-external links'} = $self->test_and_replace($text, 
 				qr/\[
-					{1,2}(https?:\/\/de\.wikipedia\.org\/wiki\/[^\]|\x20\x23]++
-					(?:\x23(?!mediaviewer)[^\]|\x20]+)?)\s
+					{1,2}(https?:\/\/de\.wikipedia\.org\/wiki\/[^\]|\x20\x23?]++
+					(?:\x23(?!mediaviewer)[^\]|\x20?]+)?)\s
 					([^\]]+)
 				\]{1,2}/mx, 
 				'"[[".$self->url2title($1).($self->url2title($1) eq $2 ? "" : "|$2")."]]"');
@@ -452,14 +452,26 @@ sub syntaxCheck{
 		unless(defined $self->{'namespaces'}){
 			# get namespaces
 			$self->{'namespaces'} = {$self->{'mw_bot'}->get_namespace_names()};
+			my $res = $self->{'mw_api'}->api({
+				'action' => 'query',
+				'meta'   => 'siteinfo',
+				'siprop' => 'namespacealiases',
+			}) or die $self->{'mw_api'}->{'error'}->{'code'} . ': ' . 
+				$self->{'mw_api'}->{'error'}->{'details'};
+			$self->{'namespacealiases'} = {
+				map { 
+					($_->{'*'} => $_->{'id'});
+				} @{$res->{'query'}->{'namespacealiases'}}
+			};
 		}
 		if($ns =~ /^[0-9]+$/){
 			$converted = $self->{'namespaces'}->{$ns};
 		}else{
 			my %rev_ns = reverse(%{$self->{'namespaces'}});
-			$converted = $rev_ns{$ns};
+			$converted = $rev_ns{$ns} // $self->{'namespacealiases'}->{$ns};
 		}
-		$self->msg("could not resolve '$ns'", 'error') unless defined $converted;
+		$converted = 0 unless defined $converted;
+		#$self->msg("could not resolve '$ns'", 'error') unless defined $converted;
 		return $converted;
 	}
 
@@ -2179,7 +2191,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		$article_name =~s/_/ /g;
 		# 2014-12-23, seth: "https://de.wikipedia.org/wiki/K%C3%B6nigliche_und_barmherzige_Vereinigung_der_Ordens-_und_Medaillentr%C3%A4ger_von_Belgien" became: "KÃ¶nigliche und barmherzige Vereinigung der Ordens- und MedaillentrÃ¤ger von Belgien"
 		utf8::decode($article_name);
-		$article_name =~ s/^(?=Datei:|Bild:|Image:|File:)/:/;
+		$article_name =~ s/^(?=Datei:|Bild:|Image:|File:|Category:|Kategorie:)/:/;
 		return $article_name;
 	}
 
@@ -2378,9 +2390,9 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		my $term   = shift // {'shortterm'=>1, 'midterm'=>1};
 		my $camelbot = $self->{'camelbot'};
 		if(# $rc_msg->{'user'} eq 'Lustiger seth' or # for debugging only
-			$rc_msg->{'user'} ne $camelbot->{'mw_username'} and # don't track own edit
-			$rc_msg->{'summary'} !~ /\bCamelBot\b.*\b(?:rückgängig gemacht|revertiert)\b/# and # don't play edit war
-			#$rc_msg->{'ns_id'} == 0
+			$rc_msg->{'user'} ne $camelbot->{'mw_username'} # don't track own edit
+				and $rc_msg->{'summary'} !~ /\bCamelBot\b.*\b(?:rückgängig gemacht|revertiert)\b/ # don't play edit war
+				and $rc_msg->{'ns_id'} == 0
 		){
 			$self->{'rc_pages_midterm'}->{$rc_msg->{'page_with_ns'}} = $now if $term->{'midterm'};
 			$self->{'rc_pages_shortterm'}->{$rc_msg->{'page_with_ns'}} = $now if $term->{'shortterm'};
@@ -2399,7 +2411,8 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			$self->handle_rc_pages();
 		}
 		# update edit filter index
-		if($rc_msg->{'ns_id'} == 4 and $rc_msg->{'page'} =~ /^$self->{'re_edit_filter_name'}\//
+		if($rc_msg->{'ns_id'} == 4 
+				and $rc_msg->{'page'} =~ /^$self->{'re_edit_filter_name'}\//
 				and $self->{'last_update_of_editfilter_index'} < $now){
 			$camelbot->update_edit_filter_index();
 			$self->{'last_update_of_editfilter_index'} = time;
@@ -2616,9 +2629,10 @@ if(defined $params->{'parse'}){
 }
 
 if($params->{'rc-monitoring'}){
+	$camelbot->{'mw_api'}->{config}->{api_url} = $camelbot->{'mw_apiurl'};
 	if($params->{'rc-monitoring'} eq 'irc'){
 		$camelbot->update_edit_filter_index();
-		my $username = 'CamelBot_';
+		my $username = 'CamelBot';
 		my $bot_irc = CamelBotIRC->new($camelbot,{
 			server   => 'irc.wikimedia.org',
 			channels => ['#de.wikipedia'],
