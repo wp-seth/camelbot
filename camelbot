@@ -11,7 +11,7 @@ use Getopt::Long qw(:config bundling); # cli params
 use Pod::Usage;            # cli params help
 
 # global vars
-$main::VERSION = '1.09.20150217';
+$main::VERSION = '1.10.20150217';
 
 # packages: CamelBot, CamelBotRC, CamelBotIRC
 #
@@ -567,7 +567,18 @@ sub syntaxCheck{
 		# check whether token exists:
 		my $return_header = 1;
 		my $db_table;
-		my $rows = '`rc_timestamp`, `rc_user_text`, `rc_namespace`, `rc_title`, `rc_comment`, `rc_old_len`, `rc_new_len`';
+		my $rows = [
+			'rc_timestamp', 
+			'rc_user_text', 
+			'rc_namespace', 
+			'rc_title', 
+			'rc_comment', 
+			'rc_this_oldid', 
+			'rc_last_oldid', 
+			'rc_old_len', 
+			'rc_new_len',
+		];
+		$rows = join ', ', map {$_ = '`'.$_.'`'} @$rows;
 		if(defined $timestamp_end){
 			$db_table = $self->_db_simplequery(['
 					SELECT '.$rows.'
@@ -575,6 +586,7 @@ sub syntaxCheck{
 					WHERE `rc_timestamp`>=%s
 						AND `rc_timestamp`<=%s
 						AND `rc_namespace`=0
+						AND `rc_log_type` IS NULL
 					ORDER BY `rc_timestamp`
 			', $timestamp_begin, $timestamp_end], !$return_header);
 		}else{
@@ -583,6 +595,7 @@ sub syntaxCheck{
 					FROM `recentchanges` 
 					WHERE `rc_timestamp`>=%s 
 						AND `rc_namespace`=0
+						AND `rc_log_type` IS NULL
 					ORDER BY `rc_timestamp`
 			', $timestamp_begin], !$return_header);
 		}
@@ -2311,10 +2324,12 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 				$self->{'camelbot'}->convert_ns($dataset->[2]) . ':' . $dataset->[3];
 			#$rc_msg{'flags'}     = $dataset->[];
 			#$rc_msg{'url'}       = $dataset->[];
-			$rc_msg{'diffbytes'} = $dataset->[6] - $dataset->[5];
+			$rc_msg{'diffbytes'} = $dataset->[8] - $dataset->[7];
 			push @$rc_pages, \%rc_msg;
 		}
-		if($self->{'camelbot'}->{'verbosity'} > 1){
+		if($self->{'camelbot'}->{'verbosity'} > 1
+				or $self->{'camelbot'}->{'verbosity'} > 0 and @$table > 50
+		){
 			$self->{'camelbot'}->msg('got '.(0+@$table).' entries.');
 		}
 		return $rc_pages;
@@ -2458,9 +2473,9 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 					--$dbl_counter{$_->{'page_with_ns'}} ==0 
 				} (@$rc_pages, @$new_rc_pages)
 			];
-			# todo: under construction
+			$camelbot->msg('looping over '.(0+@$rc_pages).' pages') if $camelbot->{verbosity} > 0;
 			for my $rc_msg(@$rc_pages){
-				print Dumper $rc_msg;
+				print Dumper $rc_msg if $camelbot->{verbosity} > 3;
 				$self->put_new_rc($rc_msg, $rc_msg->{'timestamp'}, {'midterm'=>1});
 			}
 		}
