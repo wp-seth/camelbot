@@ -11,7 +11,7 @@ use Getopt::Long qw(:config bundling); # cli params
 use Pod::Usage;            # cli params help
 
 # global vars
-$main::VERSION = '1.12.20150218';
+$main::VERSION = '1.13.20150221';
 
 # packages: CamelBot, CamelBotRC, CamelBotIRC
 #
@@ -222,6 +222,7 @@ sub syntaxCheck{
 		'rc-monitoring'      => undef, # start rc monitoring via irc or db
 		'save-as-html'       => undef, # download pages and save as html pages
 		'search-sbl-blocked-log' => undef, # search the sbl log of blocked edits
+		'search-sbl-blocked-log-lang' => undef, # search the sbl logs of several wikis of blocked edits
 		'section'            => undef, # section in wikipage
 		'text-replacement'   => 0,     # text replacing
 		'udest'              => undef, # destination filename
@@ -250,6 +251,7 @@ sub syntaxCheck{
 		'rc-monitoring=s',
 		'save-as-html=s',
 		'search-sbl-blocked-log=s',
+		'search-sbl-blocked-log-lang=s',
 		'section=s',
 		'text-replacement',
 		'udest=s',
@@ -560,10 +562,9 @@ sub syntaxCheck{
 		my $db_query      = shift;
 		my $return_header = shift // 1;
 		my $lang          = shift // 'de';
+		$self->msg(3, "lang = $lang");
 		my $dbh = $self->_db_init(undef, $lang) or return undef;
-		#print " <div>";
 		#print Dumper $db_query;
-		#print "</div>\n";
 		if(ref(\$db_query) ne 'SCALAR'){
 			#$db_query->[0] =~ s/\s+/ /g;
 			$db_query->[0] =~ s/^\s+|\s+\z//g;
@@ -572,7 +573,7 @@ sub syntaxCheck{
 				$dbh->quote($_); #(not defined $_) ? 'NULL'  (will be done by quote, so ensure, using '%s' even on numbers)
 			} @$db_query[1..@$db_query-1];
 		}
-		#print " <div>$db_query</div>\n"; # debug
+		$self->msg(2, $db_query);
 		my $db_table = $self->_db_query($dbh, $db_query, $return_header);
 		$dbh->disconnect;
 		return $db_table;
@@ -641,6 +642,8 @@ sub syntaxCheck{
 		my $self = shift;
 		my $lang = shift // 'de';
 		my $url_re = shift // '.';
+		# mariadb does not know perl's /(?^)/ pattern
+		$url_re =~ s/\(\?\K\^//g; 
 		my $return_header = 1;
 		my $db_table;
 		my $rows = [
@@ -657,8 +660,8 @@ sub syntaxCheck{
 				FROM `logging` 
 				WHERE `log_type` = \'spamblacklist\'
 					AND log_params regexp %s
-				ORDER BY `rc_timestamp`
-		', $url_re], !$return_header, 'de');
+				ORDER BY `log_timestamp`
+		', $url_re], !$return_header, $lang);
 		return $db_table;
 	}
 
@@ -1394,6 +1397,7 @@ sub syntaxCheck{
 				or $self->{'cliparams'}->{'upload'} 
 				or $self->{'cliparams'}->{'link-replacement'}
 				or $self->{'cliparams'}->{'search-sbl-blocked-log'}
+				or $self->{'cliparams'}->{'search-sbl-blocked-log-lang'}
 		){
 			$self->{'mw_api'}->{'config'}->{'api_url'} = $self->{'mw_apiurl'};
 			$self->{'mw_api'}->{'config'}->{'upload_url'} = $wiki_base_url.'/wiki/Special:Upload';
@@ -1842,8 +1846,9 @@ sub syntaxCheck{
 	sub search_sbl_blocked_log{
 		my $self   = shift;
 		my $regexp = shift;
+		my $lang   = shift // 'de';
 		my @results = ();
-		my $db_table = $self->db_fetch_sbl_log($regexp);
+		my $db_table = $self->db_fetch_sbl_log($lang, $regexp);
 		if(defined $db_table){
 			for my $dataset(@$db_table){
 				push @results, {
@@ -1856,6 +1861,7 @@ sub syntaxCheck{
 				};
 				$results[-1]->{'url'} =~ s/^.*?"(http[^"]*)".*$/$1/;
 			}
+			$self->msg(1, 'found '.scalar(@results).' matching blocked edits.');
 		}else{ # use api
 			# api.php?action=query&list=logevents&letype=spamblacklist&leprop=ids|title|type|user|timestamp|comment|details&continue=
 			my $query = {
@@ -2888,7 +2894,22 @@ if(defined $params->{'search-sbl-blocked-log'}){
 	my $blocked_edits = $camelbot->search_sbl_blocked_log(
 		qr/$params->{'search-sbl-blocked-log'}/);
 	for my $edit(@$blocked_edits){
-		print "$edit->{'timestamp'}, $edit->{'url'}, $edit->{'user'}\n";
+		print "$edit->{'timestamp'}, $edit->{'url'}, $edit->{'user'}; $edit->{'title'}\n";
+	}
+}
+
+if(defined $params->{'search-sbl-blocked-log-lang'}){
+	my @langs = qw(ca ceb de en es fr it ja nl no pl pt ru sv uk vi war zh);
+	my %results = ();
+	for my $lang(@langs){
+		$results{$lang} = $camelbot->search_sbl_blocked_log(
+			qr/$params->{'search-sbl-blocked-log-lang'}/, $lang);
+	}
+	while(my ($lang, $blocked_edits) = each %results){
+		$camelbot->msg(1, "$lang: ".scalar(@$blocked_edits));
+		for my $edit(@$blocked_edits){
+			print "$edit->{'timestamp'}, $edit->{'url'}, $edit->{'user'}; $edit->{'title'}\n"; 
+		}
 	}
 }
 
@@ -3064,6 +3085,8 @@ mediawiki/wikipedia options:
      --save_as_html=s          saves a given wiki page as local html-file
      --search-sbl-blocked-log=s search the list of blocked edits (blocked by sbl) 
                                   for a given url-regexp
+     --search-sbl-blocked-log-lang=s search the list of blocked edits (blocked by
+                                  for a given url-regexp. search in several wikis.
  -t, --test                    don't change anything, just print possible changes
      --update-editfilter-index update edit filter index (at w:de)
      --upload                  upload a file
@@ -3152,6 +3175,11 @@ extension .html.
 =item B<--search-sbl-blocked-log>=I<regexp>
 
 search the log of edits blocked by sbl for a given url-regexp I<regexp>
+
+=item B<--search-sbl-blocked-log-lang>=I<regexp>
+
+search the log of edits blocked by sbl for a given url-regexp I<regexp>. search
+several wikis.
 
 =item B<--test>, B<-t>
 
