@@ -11,7 +11,7 @@ use Getopt::Long qw(:config bundling); # cli params
 use Pod::Usage;            # cli params help
 
 # global vars
-$main::VERSION = '1.11.20150217';
+$main::VERSION = '1.12.20150218';
 
 # packages: CamelBot, CamelBotRC, CamelBotIRC
 #
@@ -26,6 +26,9 @@ $main::VERSION = '1.11.20150217';
 # -------------------
 # sub new
 # 	constructor
+#
+# sub api_cont
+# 	use MediaWiki::API using 'continue' for a loop
 #
 # sub cat_add
 # 	adds a given bunch of pages to a given category by adding [[category:new]] at 
@@ -46,19 +49,23 @@ $main::VERSION = '1.11.20150217';
 # 	converts namespace id to its name or vice versa
 #
 # sub _db_init
-#		init db connection
+# 	init db connection
 #
 # sub _db_query
-#		send query to db
+# 	send query to db
 #
 # sub _db_simplequery
-#		wrapper for simple db queries
+# 	wrapper for simple db queries
 #
 # sub db_fetch_recentchanges
-#		use db to get recent changes for a given time period
+# 	use db to get recent changes for a given time period
+#
+# sub db_fetch_sbl_log
+# 	use db to get all entries of the sbl log of blocked edits; optional 
+# 	(but recommended) given a regexp for a searched url
 #
 # sub delete_marked_pages
-#		delete pages that are in a special category
+# 	delete pages that are in a special category
 # 
 # sub delete_wiki_page
 # 	deletes a wiki page
@@ -127,15 +134,18 @@ $main::VERSION = '1.11.20150217';
 #
 # sub save_wiki_page
 # 	\brief saves a wiki page
-#		\param[in] $bot a logged in MediaWiki::Bot
-#		\param[in] $page_utf8 page name in utf8
-#		\param[in] $summary an edit summary (without 'Bot: ') that will be used when 
-#			saving
-#		\param[in] $text a ref to the new wikitext
-#		\param[in] $orig_text a ref to the old wikitext
-#		\param[in] $time_stack a ref to an array that is used for low frequency editing
-#		\param[in] $user_answer a ref to a string containing '' (nothing) or 'y' to 
-#			save the last user's answer
+# 	\param[in] $bot a logged in MediaWiki::Bot
+# 	\param[in] $page_utf8 page name in utf8
+# 	\param[in] $summary an edit summary (without 'Bot: ') that will be used when 
+# 		saving
+# 	\param[in] $text a ref to the new wikitext
+# 	\param[in] $orig_text a ref to the old wikitext
+# 	\param[in] $time_stack a ref to an array that is used for low frequency editing
+# 	\param[in] $user_answer a ref to a string containing '' (nothing) or 'y' to 
+# 		save the last user's answer
+#
+# sub search_sbl_blocked_log
+# 	search the list of blocked edits (blocked by sbl) for a given url-regexp
 #
 # sub table2wikitext
 # 	converts a special table hash ref to wikitext
@@ -211,6 +221,7 @@ sub syntaxCheck{
 		'parse'              => undef, # wikitext-file to parse
 		'rc-monitoring'      => undef, # start rc monitoring via irc or db
 		'save-as-html'       => undef, # download pages and save as html pages
+		'search-sbl-blocked-log' => undef, # search the sbl log of blocked edits
 		'section'            => undef, # section in wikipage
 		'text-replacement'   => 0,     # text replacing
 		'udest'              => undef, # destination filename
@@ -227,38 +238,39 @@ sub syntaxCheck{
 	);
 	pod2usage(-exitval=>2) if @ARGV==0;
 	GetOptions(\%params,
-		"cat-add",
-		"cat-change|c",
-		"delete",
-		"download-by-prefix=s",
-		"http-status=s",
-		"irc" => sub { $params{'rc-monitoring'} = 'irc';},
-		"link-replacement|l",
-		"minor!",
-		"parse=s",
-		"rc-monitoring=s",
-		"save-as-html=s",
-		"section=s",
-		"text-replacement",
-		"udest=s",
-		"update-editfilter-index",
-		"upload",
-		"usercontribs|usercontributions",
-		"username=s",
-		"usource=s",
-		"usummary=s",
-		"wikipage=s",
-		"test|t",
-		"silent|quiet|q" => sub { $params{'verbose'} = 0;},
-		"very-verbose" => sub { $params{'verbose'} = 2;},
-		"verbose|v:+",
+		'cat-add',
+		'cat-change|c',
+		'delete',
+		'download-by-prefix=s',
+		'http-status=s',
+		'irc' => sub { $params{'rc-monitoring'} = 'irc';},
+		'link-replacement|l',
+		'minor!',
+		'parse=s',
+		'rc-monitoring=s',
+		'save-as-html=s',
+		'search-sbl-blocked-log=s',
+		'section=s',
+		'text-replacement',
+		'udest=s',
+		'update-editfilter-index',
+		'upload',
+		'usercontribs|usercontributions',
+		'username=s',
+		'usource=s',
+		'usummary=s',
+		'wikipage=s',
+		'test|t',
+		'silent|quiet|q' => sub { $params{'verbose'} = 0;},
+		'very-verbose' => sub { $params{'verbose'} = 2;},
+		'verbose|v:+',
 		# auto_version will not auto make use of 'V'
-		"version|V" => sub { Getopt::Long::VersionMessage();}, 
+		'version|V' => sub { Getopt::Long::VersionMessage();}, 
 		# auto_help will not auto make use of 'h'
-		"help|?|h" => sub { Getopt::Long::HelpMessage(
+		'help|?|h' => sub { Getopt::Long::HelpMessage(
 				-verbose  => 99, 
-				-sections => "NAME|SYNOPSIS|EXAMPLES");},
-		"man" => sub { pod2usage(-exitval=>0, -verbose=>2);},
+				-sections => 'NAME|SYNOPSIS|EXAMPLES');},
+		'man' => sub { pod2usage(-exitval=>0, -verbose=>2);},
 	) or pod2usage(-exitval=>2);
 	$params{'verbose'} = 1 unless exists $params{'verbose'};
 	my @additional_params = (0,0); # number of additional params (min, max);
@@ -331,6 +343,27 @@ sub syntaxCheck{
 		return $self;
 	}
 
+	sub api_cont{
+		my $self       = shift;
+		my $query      = shift;
+		my $mw_options = shift;
+		my $finished = 0;
+		my $pages = $self->{'mw_api'}->api($query, $mw_options) 
+			or die $self->{'mw_api'}->{'error'}->{'code'}.': ' . 
+				$self->{'mw_api'}->{'error'}->{'details'};
+		if(defined $pages->{'continue'}){
+			while(my ($k, $v) = each(%{$pages->{'continue'}})){
+				$query->{$k} = $v;
+			}
+		}else{
+			$finished = 1;
+		}
+		#if(defined $pages->{'batchcomplete'}){
+		#	print Dumper $pages->{'batchcomplete'};
+		#}
+		return ($pages, $finished);
+	}
+
 	sub cat_add{
 		my $self  = shift;
 		my $pages = shift;
@@ -339,16 +372,16 @@ sub syntaxCheck{
 		my $summary = '+cat';
 		my $cat_first = lc substr($cat, 0, 1);
 		my $cat_tail = substr($cat, 1);
-		$self->msg("start cat adding...") if $self->{'verbosity'} > 0;
+		$self->msg(1, "start cat adding...");
 		for my $page (@$pages){
-			$self->msg("page = $page") if $self->{'verbosity'} > 0;
+			$self->msg(1, "page = $page");
 			my $page_utf8 = $page;
 			utf8::decode($page_utf8);
 			my $text = $self->{'mw_bot'}->get_text($page_utf8);
 			next unless $self->is_allowed(\$text, $page);
 			# page is already in cat
 			next if $text =~ /\[\[[Cc]ategory:(?i:\Q$cat_first\E)\Q$cat_tail\E\]\]/;
-			$self->msg("add page to cat.") if $self->{'verbosity'} > 0;
+			$self->msg(1, "add page to cat.");
 			# add page to cat
 			my $text_bak = $text;
 			if($text =~ /\[\[[cC]ategory:/){
@@ -371,13 +404,13 @@ sub syntaxCheck{
 		my $summary = 'cat change';
 		my $old_cat_first = lc substr($old_cat, 0, 1);
 		my $old_cat_tail = substr($old_cat, 1);
-		$self->msg("start cat renaming...") if $self->{'verbosity'} > 0;
+		$self->msg(1, "start cat renaming...");
 		# get pages in (old) category
 		my @pages = $self->{'mw_bot'}->get_pages_in_category("Category:$old_cat");
-		$self->msg('found '.@pages." pages:") if $self->{'verbosity'} > 0;
+		$self->msg(1, 'found '.@pages." pages:");
 		# for all pages in category change category
 		for my $page (@pages){
-			$self->msg("page = $page") if $self->{'verbosity'} > 0;
+			$self->msg(1, "page = $page");
 			my $text = $self->{'mw_bot'}->get_text($page);
 			next unless $self->is_allowed(\$text, $page);
 			my $text_bak = $text;
@@ -385,7 +418,7 @@ sub syntaxCheck{
 				\[\[[cC]ategory:((?i:\Q$old_cat_first\E)\Q$old_cat_tail\E)\]\]
 				/[[category:$new_cat]]/gx;
 			if($text ne $text_bak){
-				$self->msg("changing cat: $1 -> $new_cat") if $self->{'verbosity'} > 0;
+				$self->msg(1, "changing cat: $1 -> $new_cat");
 				$self->time_management();
 				$self->save_wiki_page($page, $summary, \$text, \$text_bak);
 			}
@@ -403,7 +436,7 @@ sub syntaxCheck{
 				$url = $1;
 			}
 			my $response_code = $self->get_http_status($url);
-			$self->msg("  status of '$url': $response_code") if $self->{'verbosity'} > 0;
+			$self->msg(1, "  status of '$url': $response_code");
 			$ok = 0 if $response_code != 200;
 		}
 		return $ok;
@@ -471,21 +504,22 @@ sub syntaxCheck{
 			$converted = $rev_ns{$ns} // $self->{'namespacealiases'}->{$ns};
 		}
 		$converted = 0 unless defined $converted;
-		#$self->msg("could not resolve '$ns'", 'error') unless defined $converted;
+		#$self->msg(1, "could not resolve '$ns'", 'error') unless defined $converted;
 		return $converted;
 	}
 
 	sub _db_init{
-		my $self = shift;
+		my $self    = shift;
 		my $db_file = shift // $ENV{'HOME'}.'/replica.my.cnf';
+		my $lang    = shift // 'de';
 		# db connection parameters
 		my $db = {
-			'host' => 'dewiki.labsdb',
-			'name' => 'dewiki_p',
+			'host' => $lang.'wiki.labsdb',
+			'name' => $lang.'wiki_p',
 		};
 		my $opened = open(my $INFILE, '<', $db_file);
 		unless($opened){
-			$self->msg("could not read db conn file: $!", 'error');
+			$self->msg(0, "could not read db conn file: $!", 'error');
 			return 0;
 		}
 		while(my $line = <$INFILE>){
@@ -501,7 +535,7 @@ sub syntaxCheck{
 				'AutoCommit' => 1,
 				'mysql_enable_utf8' => 1
 			}
-		) or $self->msg('cannot connect to db: '.$DBI::errstr);
+		) or $self->msg(0, 'cannot connect to db: '.$DBI::errstr);
 		return $dbh;
 	}
 
@@ -510,7 +544,8 @@ sub syntaxCheck{
 		my $dbh   = shift;
 		my $query = shift;
 		my $return_header = shift // 1;
-		my $sth = $dbh->prepare($query) or $self->msg($dbh->errstr.' query = \''.$query.'\'');
+		my $sth = $dbh->prepare($query) 
+			or $self->msg(0, $dbh->errstr.' query = \''.$query.'\'');
 		return 0 unless defined $sth;
 		$sth->execute;
 		my $names = $sth->{'NAME'}; # or NAME_lc if needed
@@ -524,7 +559,8 @@ sub syntaxCheck{
 		my $self          = shift;
 		my $db_query      = shift;
 		my $return_header = shift // 1;
-		my $dbh = $self->_db_init() or return undef;
+		my $lang          = shift // 'de';
+		my $dbh = $self->_db_init(undef, $lang) or return undef;
 		#print " <div>";
 		#print Dumper $db_query;
 		#print "</div>\n";
@@ -564,7 +600,6 @@ sub syntaxCheck{
 			# default = last 12 hours
 			$timestamp_begin = strftime("%Y%m%d%H%M%S", gmtime(time()-60*60*12));
 		}
-		# check whether token exists:
 		my $return_header = 1;
 		my $db_table;
 		my $rows = [
@@ -602,6 +637,31 @@ sub syntaxCheck{
 		return $db_table;
 	}
 
+	sub db_fetch_sbl_log{
+		my $self = shift;
+		my $lang = shift // 'de';
+		my $url_re = shift // '.';
+		my $return_header = 1;
+		my $db_table;
+		my $rows = [
+			'log_timestamp',
+			'log_namespace',
+			'log_title',
+			'log_comment',
+			'log_params',
+			'log_user_text',
+		];
+		$rows = join ', ', map {$_ = '`'.$_.'`'} @$rows;
+		$db_table = $self->_db_simplequery(['
+				SELECT '.$rows.'
+				FROM `logging` 
+				WHERE `log_type` = \'spamblacklist\'
+					AND log_params regexp %s
+				ORDER BY `rc_timestamp`
+		', $url_re], !$return_header, 'de');
+		return $db_table;
+	}
+
 	sub delete_marked_pages{
 		my $self = shift;
 		my $summary = 'deleting marked page';
@@ -610,13 +670,12 @@ sub syntaxCheck{
 		utf8::decode($delete_cat);
 		my @pages = grep {!/Template:L.schen/} 
 			$self->{'mw_bot'}->get_pages_in_category($delete_cat);
-		$self->msg('found '.(@pages+0).' pages.') if $self->{'verbosity'} > 0;
-		$self->msg('adding manually set pages') if $self->{'verbosity'} > 1;
+		$self->msg(1, 'found '.(@pages+0).' pages.');
+		$self->msg(2, 'adding manually set pages');
 		push @pages, ();
 		for my $page(@pages){
-			if($self->{'verbosity'} > 2 or 
-				 $self->{'verbosity'} > 0 and $self->{'simulation'}){
-				$self->msg(" $page");
+			if($self->{'verbosity'} >= 3 or $self->{'simulation'}){
+				$self->msg(1, " $page");
 			}
 			$self->time_management();
 			$self->delete_wiki_page($page, $summary);
@@ -637,7 +696,7 @@ sub syntaxCheck{
 					or $user_input=~/y(?:es)?/ 
 					or ($user_input eq '' and $self->{'user_answer'} eq 'y')){
 				$self->{'user_answer'} = 'y';
-				$self->msg("  deleting page [[$page]] ...") if $self->{'verbosity'} > 0;
+				$self->msg(1, "  deleting page [[$page]] ...");
 				push @{$self->{'time_stack'}}, time;
 				$self->{'mw_api'}->edit({
 					'action' => 'delete',
@@ -666,7 +725,7 @@ sub syntaxCheck{
 		$mech->agent_alias('Linux Mozilla');
 		$mech->get($cssurl);
 		if($mech->status() != 200){
-			$self->msg('download of css failed. status: '.$mech->status(), 'error');
+			$self->msg(0, 'download of css failed. status: '.$mech->status(), 'error');
 		}else{
 			my $css_content = $mech->content();
 			write_file($filename, $css_content);
@@ -680,22 +739,22 @@ sub syntaxCheck{
 		my $no_warn_files = shift;
 		my $files_prefix  = shift // '';
 		for my $file(@$files){
-			$self->msg("getting '$file' from wiki") if $self->{'verbosity'} > 1;
+			$self->msg(2, "getting '$file' from wiki");
 			my $img_data = $self->{'mw_bot'}->get_image("File:$file");
 			unless(defined $img_data){
-				$self->msg("could not read file '$file' from wiki", 'error');
+				$self->msg(0, "could not read file '$file' from wiki", 'error');
 				next;
 			}
 			$file = $self->title2filename($file);
 			if(-e $file){
 				unless(grep {$_ eq $file} @$no_warn_files){
-					$self->msg("file '$file' exists already", 'warning');
+					$self->msg(0, "file '$file' exists already", 'warning');
 					push @$no_warn_files, $file;
 				}
 				next;
 			};
 			push @$no_warn_files, $file;
-			$self->msg("writing file '$file'") if $self->{'verbosity'} > 1;
+			$self->msg(2, "writing file '$file'");
 			write_file($files_prefix.$file, {binmode => ':raw'}, \$img_data);
 		}
 		return 1;
@@ -708,14 +767,14 @@ sub syntaxCheck{
 			$self->{'mw_bot'}->prefixindex($prefix);
 		die "error: no pages found with prefix '$prefix}'.\n" if @prefix_pages==0;
 		my $page_texts = $self->{'mw_bot'}->get_pages(\@prefix_pages);
-		if($self->{'verbosity'} > 0){
-			map {$self->msg("getting '$_'")} sort keys %$page_texts;
+		if($self->{'verbosity'} >= 1){
+			map {$self->msg(1, "getting '$_'")} sort keys %$page_texts;
 		}
 		my $no_warn_files = [];
 		my $files_prefix = '';
 		while(my ($title, $text) = each %$page_texts){
 			$title = $self->title2filename($title).'.wikitext';
-			$self->msg("saving '$title'") if $self->{'verbosity'} > 1;
+			$self->msg(2, "saving '$title'");
 			die "error: file '$title' exists already\n" if -e $title;
 			write_file($title, {binmode => ':utf8'}, $text);
 			my @images = $text=~/
@@ -752,20 +811,8 @@ sub syntaxCheck{
 		my $finished = 0;
 		my @results;
 		while(!$finished){
-			my $pages = $self->{'mw_api'}->api($query, $mw_options) 
-				or die $self->{'mw_api'}->{'error'}->{'code'}.': ' . 
-					$self->{'mw_api'}->{'error'}->{'details'};
-			if(defined $pages->{'continue'}){
-				while(my ($k, $v) = each(%{$pages->{'continue'}})){
-					$query->{$k} = $v;
-				}
-			}else{
-				$finished = 1;
-			}
+			my ($pages, $finished) = $self->api_cont($query, $mw_options);
 			map {$results[$_->{'id'}] = $_->{'description'}} @{$pages->{'query'}->{'abusefilters'}};
-			#if(defined $pages->{'batchcomplete'}){
-			#	print Dumper $pages->{'batchcomplete'};
-			#}
 		}
 		return \@results;
 	}
@@ -796,7 +843,7 @@ sub syntaxCheck{
 		my $self   = shift;
 		my $titles = shift;
 		$titles = join '|', @$titles if ref $titles eq 'ARRAY';
-		# https://de.wikipedia.org/w/api.php?action=query&prop=info&titles=Wikipedia:Bearbeitungsfilter/latest%20topics&continue=
+		# api.php?action=query&prop=info&titles=Wikipedia:Bearbeitungsfilter/latest%20topics&continue=
 		my $query = {
 			'action'         => 'query',
 			'continue'       => '',
@@ -877,7 +924,7 @@ sub syntaxCheck{
 		my $ucend   = $options->{'ucend'};
 		my $uclimit = $options->{'uclimit'};
 		my $user    = $options->{'username'} // $options->{'usernameprefix'};
-		$self->msg("searching for contributions of user: $user");
+		$self->msg(1, "searching for contributions of user: $user");
 		#my $ref = $self->{'mw_bot'}->contributions($options->{'username'}, 0, undef);
 		$self->{'mw_api'}->{config}->{api_url} = $self->{'mw_apiurl'};
 		my $query = {
@@ -901,7 +948,7 @@ sub syntaxCheck{
 		#while((keys %list_of_articles)<$uclimit and 
 		# (defined $ucend and $ucstart gt $ucend or not defined $ucend)){
 			#if(defined $ucstart and defined $ucend){
-			#	msg("ucstart = $ucstart, ucend = $ucend") 
+			#	$self->msg(1, "ucstart = $ucstart, ucend = $ucend") 
 			#}
 			my $tmp = $self->{'mw_api'}->api($query, $mw_options);
 			$ucstart = $tmp->{'query-continue'}->{'usercontribs'}->{'ucstart'};
@@ -941,7 +988,7 @@ sub syntaxCheck{
 				$allowed = 0;
 			}
 		}
-		$self->msg("bot is not allowed on page '$page'.") if $allowed==0;
+		$self->msg(1, "bot is not allowed on page '$page'.") if $allowed==0;
 		return $allowed;
 	}
 
@@ -995,12 +1042,12 @@ sub syntaxCheck{
 		);
 
 		if($options{'articles'}){
-			$self->msg("starting linksearch in ns=0...");
+			$self->msg(1, "starting linksearch in ns=0...");
 			my @links;
 			if(defined $options{'searched_link'}){
 				@links = $self->{'mw_bot'}->linksearch($options{'searched_link'}, 0, undef);
 			}elsif(defined $options{'user_contribs'}){
-				$self->msg('searching for contributions of user:' . 
+				$self->msg(1, 'searching for contributions of user:' . 
 					$options{'user_contribs'}->{'user'});
 				#my $ref = $self->{'mw_bot'}->contributions(
 				#	$options{'user_contribs'}->{'user'}, 0, undef);
@@ -1009,7 +1056,7 @@ sub syntaxCheck{
 				#$options{'uclimit'}  = '10';
 				#$options{'username'} = $options{'user_contribs'}->{'user'};
 				#$options{'namespace'} = 0;
-				#get_user_contribs($options);
+				#$self->get_user_contribs($options);
 				#my $mwapi = MediaWiki::API->new();
 				#$mw->{config}->{api_url} = 'https://de.wikipedia.org/w/api.php';
 				my $ucstart = '2011-03-18T00:00:00Z';
@@ -1026,7 +1073,7 @@ sub syntaxCheck{
 				};
 				my $mw_options = {'max' => 1};
 				while($ucstart gt $ucend){
-					$self->msg("ucstart = $ucstart, ucend = $ucend");
+					$self->msg(1, "ucstart = $ucstart, ucend = $ucend");
 					my $tmp = $self->{'mw_api'}->api($query, $mw_options);
 					$ucstart = $tmp->{'query-continue'}->{'usercontribs'}->{'ucstart'};
 					$query->{'ucstart'} = $ucstart;
@@ -1035,7 +1082,7 @@ sub syntaxCheck{
 						for(@$usercontribs){
 							next if exists $old_page_0->{$_->{'title'}};
 							$old_page_0->{$_->{'title'}} = 1;
-							# $self->msg($_->{'title'});
+							# $self->msg(1, $_->{'title'});
 							my $diff = $self->{'mw_bot'}->diff({
 								'revid' => $_->{'revid'},
 								'oldid' => 'prev',
@@ -1056,7 +1103,7 @@ sub syntaxCheck{
 					}
 				}
 			}
-			$self->msg('results (found '.@links.' links in '.
+			$self->msg(1, 'results (found '.@links.' links in '.
 				$self->num_unique_elem(map {$_->{'title'}} @links)." pages):");
 			$results{'num_ns0_links'} = 0+@links;
 			#push @links, {'url' => 'scheissegal', 'title' => 'LyX'};
@@ -1071,13 +1118,13 @@ sub syntaxCheck{
 					last;
 				}
 				#next unless $hash->{'url'}=~/$re_prot_part$re_url_part/;
-				$self->msg("$edit_counter: page= $page, url= ".$hash->{'url'});
+				$self->msg(1, "$edit_counter: page= $page, url= ".$hash->{'url'});
 				my $text = $self->{'mw_bot'}->get_text($page);
 				next unless $self->is_allowed(\$text, $page);
 				my $text_bak = $text;
 				$self->cleanup_wiki_page(\$text, $page);
 				if(defined $replacement){
-					#	test_and_replace(
+					#	$self->test_and_replace(
 					#		\$text, 
 					#		qr/$re_prot_part$re_url_part(?<trail>$self->{'re_url_class'}*)(?:(?<posturl>.*?)$re_deadlink)?/m, 
 					#		$replacement, 
@@ -1106,7 +1153,7 @@ sub syntaxCheck{
 							# backrefs
 							if($text=~/$re_ref_tag_name$re_ref_inner_part/){
 								my $ref_name = $1;
-								$self->msg($ref_name, 'debug');
+								$self->msg(1, $ref_name, 'debug');
 								$self->test_and_replace(
 									\$text, 
 									qr/<(?i:ref) name\s*=\s*['"]?\s*$ref_name\s*['"]?\s*\/\s*>/, 
@@ -1139,8 +1186,8 @@ sub syntaxCheck{
 								'""', 
 							);
 						}else{
-							$self->msg('<references /> not deleted, because it would lead to ' .
-								'an error.', 'warning');
+							$self->msg(1, '<references /> not deleted, because it would lead ' .
+								'to an error.', 'warning');
 						}
 					}
 					if($options{'nonrefs'}){
@@ -1165,7 +1212,7 @@ sub syntaxCheck{
 							|(?:<!--\x20?)?==)/mx;
 					$self->test_and_replace(\$text, $weblinks_heading_re, '"$2"');
 					if($text=~/(.*(?<!\|url=$re_prot_part)$re_url_part.*)/){
-						$self->msg(" not resolved: $1");
+						$self->msg(1, " not resolved: $1");
 					}
 				}
 				$self->time_management();
@@ -1177,16 +1224,16 @@ sub syntaxCheck{
 		if($options{'nonarticles'}){
 			my $namespaces = {$self->{'mw_bot'}->get_namespace_names()}; # get namespaces
 			$namespaces = [grep {$_!=0} keys %$namespaces]; # delete namespace 0 from list
-			$self->msg("starting linksearch in ns!=0...");
+			$self->msg(1, "starting linksearch in ns!=0...");
 			my @links;
 			if(defined $options{'searched_link'}){
 				@links = $self->{'mw_bot'}->linksearch(
 					$options{'searched_link'}, $namespaces, undef);
 			}elsif(defined $options{'user_contribs'}){
 			}
-			$self->msg('results (found '.@links." links in ".
+			$self->msg(1, 'results (found '.@links." links in ".
 				$self->num_unique_elem(map {$_->{'title'}} @links)." pages):");
-			$results{'num_ns!0_links'} = 0+@links;
+			$results{'num_ns!0_links'} = 0 + @links;
 			for my $hash (@links){
 				my $page = $hash->{'title'};
 				next if exists $old_page_1->{$page};
@@ -1197,7 +1244,7 @@ sub syntaxCheck{
 						and $options{'max_edits'} != -1){
 					last;
 				}
-				$self->msg("$edit_counter: page= $page, url= ".$hash->{'url'});
+				$self->msg(1, "$edit_counter: page= $page, url= ".$hash->{'url'});
 				my $text = $self->{'mw_bot'}->get_text($page);
 				next unless $self->is_allowed(\$text, $page);
 				my $text_bak = $text;
@@ -1233,11 +1280,15 @@ sub syntaxCheck{
 	#					$self->test_and_replace(\$text, qr/([|{]\s*)$re_prot_part($re_url_part$self->{'re_url_class'}*)(\s*[|}])/, '$1.$2.$3');
 					}
 					# not good for large pages:
-					$self->msg(" not resolved: $1") if $text=~/^(.*(?<!<nowiki>)(?<!<nowiki>\[)$re_prot_part$re_url_part.*)/m;
+					if($text=~/^(.*(?<!<nowiki>)(?<!<nowiki>\[)$re_prot_part$re_url_part.*)/m){
+						$self->msg(1, " not resolved: $1");
+					}
 					# better:
 	#				while($text=~/(^.*$re_prot_part$re_url_part.*)/gmo){
 	#					my $temp = $1;
-	#					msg(" not resolved: $temp") if $temp=~/(?<!<nowiki>)(?<!<nowiki>\[)$re_prot_part$re_url_part/;
+	#					if($temp=~/(?<!<nowiki>)(?<!<nowiki>\[)$re_prot_part$re_url_part/){
+	#						$self->msg(1, " not resolved: $temp");
+	#					}
 	#				}
 				}
 				$self->time_management();
@@ -1247,7 +1298,7 @@ sub syntaxCheck{
 		}
 		if($options{'results'}){
 			print "\n";
-			$self->msg("results:");
+			$self->msg(1, "results:");
 			print " found " . ($results{'num_ns0_links'}+$results{'num_ns!0_links'}) .
 				' links in ' . (0 + keys(%$old_page_0) + keys(%$old_page_1)) . " pages:\n";
 			if($options{'articles'} && $options{'nonarticles'}){
@@ -1270,14 +1321,14 @@ sub syntaxCheck{
 		my $wiki_password = shift;
 		# if wiki user name is not defined, let user type in wiki user name
 		if(not defined $self->{'mw_username'}){
-			$self->msg("enter wiki username:");
+			$self->msg(1, "enter wiki username:");
 			$self->{'mw_username'} = <STDIN>;
 			chomp($self->{'mw_username'});
 		}
 		# cope with auto-normalization (bug in MediaWiki::Bot)
 		$self->{'mw_username'} = ucfirst($self->{'mw_username'});
 		$self->{'mw_username'} =~y/_/ /;
-		$self->msg("login user name is $self->{'mw_username'}.") if $self->{'verbosity'} > 0;
+		$self->msg(1, "login user name is '$self->{'mw_username'}'.");
 		my $cookie = '.mediawiki-bot-'.$self->{'mw_username'}.'-cookies';
 		# if wiki user password is not defined, search typical password places or let 
 		# user type in wiki user password
@@ -1286,7 +1337,7 @@ sub syntaxCheck{
 			my $pwfile = [".password", "$ENV{HOME}/.password", "$ENV{HOME}/bot/.password"];
 			for(@$pwfile){
 				if(-e $_){
-					$self->msg("using standard password file $_") if $self->{'verbosity'} > 0;
+					$self->msg(1, "using standard password file $_");
 					open(my $INFILE, '<', $_) or die $!;
 						chomp($wiki_password = <$INFILE>);
 					close($INFILE);
@@ -1299,12 +1350,12 @@ sub syntaxCheck{
 						not ($self->{'cliparams'}->{'delete'} or $self->{'cliparams'}->{'upload'})
 					)
 			){
-				if($self->{'verbosity'} > 0){
-					print 'could not read password file at places: ';
-					print $pwfile->[$_].', ' for 0..($#$pwfile-1);
+				if($self->{'verbosity'} >= 1){
+					$self->msg(1, 'could not read password file at places: ');
+					print '  '.$pwfile->[$_].', ' for 0..($#$pwfile-1);
 					print $pwfile->[-1]."\n";
 				}
-				$self->msg("enter password (will not be echoed):");
+				$self->msg(0, "enter password (will not be echoed):");
 				ReadMode 'raw';
 				$wiki_password = ReadLine(0);
 				chomp($wiki_password);
@@ -1322,7 +1373,7 @@ sub syntaxCheck{
 			#'host'     => 'wiki.selfhtml.org',
 			#'path'     => 'mediawiki',
 		);
-		$self->msg("logging in at $address_params{'host'}...") if $self->{'verbosity'} > 1;
+		$self->msg(2, "logging in at $address_params{'host'}...");
 		$self->{'mw_bot'} = MediaWiki::Bot->new({
 			assert      => 'bot',
 			protocol    => $address_params{'protocol'},
@@ -1339,9 +1390,11 @@ sub syntaxCheck{
 		$self->{'mw_api'} = MediaWiki::API->new();
 		my $wiki_base_url = $address_params{'protocol'}.'://'.$address_params{'host'};
 		$self->{'mw_apiurl'} = $wiki_base_url.'/'.$address_params{'path'}.'/api.php';
-		if($self->{'cliparams'}->{'delete'} or $self->{'cliparams'}->{'upload'} or 
-			$self->{'cliparams'}->{'link-replacement'})
-		{
+		if(    $self->{'cliparams'}->{'delete'} 
+				or $self->{'cliparams'}->{'upload'} 
+				or $self->{'cliparams'}->{'link-replacement'}
+				or $self->{'cliparams'}->{'search-sbl-blocked-log'}
+		){
 			$self->{'mw_api'}->{'config'}->{'api_url'} = $self->{'mw_apiurl'};
 			$self->{'mw_api'}->{'config'}->{'upload_url'} = $wiki_base_url.'/wiki/Special:Upload';
 			$self->{'mw_api'}->{'config'}->{'files_url'} = '';
@@ -1352,19 +1405,21 @@ sub syntaxCheck{
 			}) or die $self->{'mw_api'}->{'error'}->{'code'}.': '.$self->{'mw_api'}->{'error'}->{'details'};
 		}else{
 			unless(defined $self->{'mw_bot'}){
-				$self->msg('maybe there\'s an expired cookie file. please delete \''. 
+				$self->msg(0, 'maybe there\'s an expired cookie file. please delete \''. 
 					$cookie. '\' and try again.', 'error') if -e $cookie;
 				die("error: could not login.\n");
 			}
 		}
-		$self->msg("logged in...") if $self->{'verbosity'} > 1;
+		$self->msg(2, "logged in...");
 		return 1;
 	}
 
 	sub msg{
-		my $self  = shift;
-		my $msg   = shift;
-		my $type  = shift;
+		my $self           = shift;
+		my $verb_threshold = shift;
+		my $msg            = shift;
+		my $type           = shift;
+		return 0 if $self->{'verbosity'} < $verb_threshold;
 		$type = (defined $type ? "$type in ": '');
 		my $timestamp = strftime("%Y-%m-%d %H:%M:%S", gmtime());
 		# my ($package, $filename, $line, $subr, $has_args, $wantarray, $evaltext, 
@@ -1439,9 +1494,7 @@ sub syntaxCheck{
 		utf8::decode($page); # is this necessary?
 		my @hist = $self->{'mw_bot'}->get_history($page, 2);
 		if(@hist==0){
-			if($self->{'verbosity'} > 0){
-				$self->msg("page '$page' doesn't seem to exist anymore.", 'notice');
-			}
+			$self->msg(1, "page '$page' doesn't seem to exist anymore.", 'notice');
 			return 0;
 		}
 		my $text = $self->{'mw_bot'}->get_text($page, $hist[0]->{'revid'}); # newest version
@@ -1469,10 +1522,8 @@ sub syntaxCheck{
 					my $text_bak = $text;
 					my $heading = 'hinweis auf katalog-nummern von amazon';
 					if($text =~ /\Q$heading\E/){
-						if($self->{'verbosity'} > 0){
-							$self->msg("user '$user_to_inform' seems to be informed already.", 
-								'notice');
-						}
+						$self->msg(1, "user '$user_to_inform' seems to be informed already.", 
+							'notice');
 					}else{
 						my $notice = $self->{'mw_bot'}->get_text('user:CamelBot/notice-ASIN');
 						my $title = $self->title2url_part($page);
@@ -1482,14 +1533,14 @@ sub syntaxCheck{
 						$text .= "\n== $heading ==\n$notice\n";
 						#if($text_bak ne $text){
 							$self->time_management();
-							$self->msg("notifying on '$userpage'") if $self->{'verbosity'} > 1;
+							$self->msg(2, "notifying on '$userpage'");
 							$self->save_wiki_page($userpage, $heading, \$text, \$text_bak);
 						#}
 					}
 				}
 			}
 		}else{
-			$self->msg("could not fetch page '$page'. maybe deleted already", 'notice') if $self->{'verbosity'} > 0;
+			$self->msg(1, "could not fetch page '$page'. maybe deleted already", 'notice');
 		}
 		return 1;
 	}
@@ -1544,9 +1595,9 @@ sub syntaxCheck{
 			$parsed_msg{'timestamp_unix'} = time();
 			$parsed_msg{'timestamp'} = strftime("%Y%m%d%H%M%S", 
 				gmtime($parsed_msg{'timestamp_unix'}));
-			print Data::Dumper->Dump([\%parsed_msg]) if $self->{'verbosity'} > 4;
+			print Data::Dumper->Dump([\%parsed_msg]) if $self->{'verbosity'} >= 5;
 		}else{
-			$self->msg($msg) if $self->{'verbosity'} > 1;
+			$self->msg(2, $msg);
 		}
 		return \%parsed_msg;
 	}
@@ -1652,10 +1703,10 @@ sub syntaxCheck{
 		my $summary   = shift;         # wiki summary
 		my $text = $self->{'mw_bot'}->get_text($page);
 		if(not defined $text){
-			$self->msg("page $page does not exist.", 'notice') if $self->{'verbosity'} > 0;
+			$self->msg(1, "page $page does not exist.", 'notice');
 			$text = '';
 		}elsif($text eq ''){
-			$self->msg("page $page is empty.", 'notice') if $self->{'verbosity'} > 0;
+			$self->msg(1, "page $page is empty.", 'notice');
 		}else{
 			return unless $self->is_allowed(\$text, $page);
 		}
@@ -1696,7 +1747,7 @@ sub syntaxCheck{
 				}
 			}
 		}
-		$self->msg($text) if $self->{'simulation'} and $self->{'verbosity'} > 1;
+		$self->msg(2, $text) if $self->{'simulation'};
 		$self->time_management();
 		$self->save_wiki_page($page, $summary, \$text, \$text_bak);
 	}
@@ -1725,7 +1776,7 @@ sub syntaxCheck{
 					$self->{'user_answer'} = 'y';
 					my $page = $page_utf8;
 					utf8::encode($page);
-					$self->msg("saving page [[$page]] ... ") if $self->{'verbosity'} > 0;
+					$self->msg(1, "saving page [[$page]] ... ");
 					push @{$self->{'time_stack'}}, time;
 					$self->{'mw_bot'}->edit({
 							is_minor => $self->{'minor'},
@@ -1740,9 +1791,7 @@ sub syntaxCheck{
 			}else{
 				my $page = $page_utf8;
 				utf8::encode($page);
-				if($self->{'verbosity'} > 0){
-					$self->msg("simulation of saving of page [[$page]] with summary '$summary'");
-				}
+				$self->msg(1, "simulation of saving of page [[$page]] with summary '$summary'");
 			}
 		}
 		return 1;
@@ -1788,6 +1837,67 @@ sub syntaxCheck{
 			MainLoop;
 		}
 		return $result;
+	}
+
+	sub search_sbl_blocked_log{
+		my $self   = shift;
+		my $regexp = shift;
+		my @results = ();
+		my $db_table = $self->db_fetch_sbl_log($regexp);
+		if(defined $db_table){
+			for my $dataset(@$db_table){
+				push @results, {
+					'ns' => $dataset->[1],
+					'title' => $dataset->[2],
+					'url' => $dataset->[4],
+					'user' => $dataset->[5],
+					'timestamp' => $dataset->[0],
+					'comment' => $dataset->[3],
+				};
+				$results[-1]->{'url'} =~ s/^.*?"(http[^"]*)".*$/$1/;
+			}
+		}else{ # use api
+			# api.php?action=query&list=logevents&letype=spamblacklist&leprop=ids|title|type|user|timestamp|comment|details&continue=
+			my $query = {
+				'action'         => 'query',
+				'continue'       => '',
+				'list'           => 'logevents', 
+				'letype'         => 'spamblacklist',
+				'lelimit'        => '500',
+				'leprop'         => 'title|type|user|timestamp|comment|details', #ids
+			};
+			my $mw_options = {'max' => 1};
+			my $finished = 0;
+			my $num_results = 0;
+			my $log_counter = 0;
+			while(!$finished){
+				(my $pages, $finished) = $self->api_cont($query, $mw_options);
+				my $curr_counter = scalar(@{$pages->{'query'}->{'logevents'}});
+				$log_counter += $curr_counter;
+				push @results, grep {
+						$_->{'url'} =~ /$regexp/
+				} @{$pages->{'query'}->{'logevents'}};
+				if($self->{'verbosity'} >= 3 and $curr_counter > 0){
+					my $min_ts = $pages->{'query'}->{'logevents'}->[0]->{'timestamp'};
+					my $max_ts = $min_ts;
+					map {
+						my $ts = $_->{'timestamp'};
+						$min_ts = $ts if $ts lt $min_ts;
+						$max_ts = $ts if $ts gt $max_ts;
+					} @{$pages->{'query'}->{'logevents'}};
+					$self->msg(3, 'found ' . (scalar(@results) - $num_results) . 
+						" blocked edits ($min_ts till $max_ts).");
+				}
+				$num_results = scalar(@results);
+			}
+			map {
+				delete $_->{'type'};
+				delete $_->{'anon'};
+				delete $_->{'action'};
+			} @results;
+			$self->msg(1, "log contains $log_counter entries. found $num_results matching blocked edits.");
+		}
+		return \@results;
 	}
 
 	sub table2wikitext{
@@ -1855,14 +1965,14 @@ sub syntaxCheck{
 			push(@$array_of_changes, [$match, $replaced]); 
 			$replaced;
 			/gpme;
-		if($self->{'verbosity'} > 0){
+		if($self->{'verbosity'} >= 1){
 			for my $repl(@$array_of_changes){
-				$self->msg("   ".$repl->[0]);
-				$self->msg(" ->".$repl->[1]);
+				$self->msg(1, "   ".$repl->[0]);
+				$self->msg(1, " ->".$repl->[1]);
 			}
 		}
 		#$test=~s/$regexp_s/$regexp_r/gmee; # just for debugging
-		#$self->msg("wrong replacing with '$regexp_r'?", 'error') if $$text ne $test;
+		#$self->msg(1, "wrong replacing with '$regexp_r'?", 'error') if $$text ne $test;
 		return $numChanges;
 	}
 
@@ -1882,14 +1992,14 @@ sub syntaxCheck{
 		# call function reference
 		my $new_url = $replacement->($old_url, $post_url);
 		# print changes to stdout
-		if($self->{'verbosity'}){
+		if($self->{'verbosity'} >= 1){
 			print "   ".$old_url."\n"; # print old text
 			print " ->".$new_url."\n"; # print replaced text
 		}
 		# check http status; avoid change, if target not reachable
 		if($new_url=~/^https?:\/\//){
 			my $response_code = $self->get_http_status($new_url);
-			$self->msg('  status: '.$response_code) if $self->{'verbosity'} > 0;
+			$self->msg(1, '  status: '.$response_code);
 			$new_url = $old_url if $response_code != 200;
 		}
 		return $new_url.$correction;
@@ -1904,7 +2014,7 @@ sub syntaxCheck{
 		my $max_edits  = $params->{'max_edits'};
 		my $skip_edits = $params->{'skip_edits'};
 		my $summary    = $params->{'summary'};
-		$self->msg("loop over pages and replace text") if $self->{'verbosity'} > 0;
+		$self->msg(1, "loop over pages and replace text");
 		my $edit_counter = -1;
 		if(@$patterns == 0+@$repls){
 			for my $page(@$pages){
@@ -1913,14 +2023,14 @@ sub syntaxCheck{
 				}elsif($edit_counter >= $max_edits and $max_edits != -1){
 					last;
 				}
-				$self->msg("$edit_counter: page = '$page'") if $self->{'verbosity'} > 0;
+				$self->msg(1, "$edit_counter: page = '$page'");
 				my $text = $self->{'mw_bot'}->get_text($page);
 				unless(defined $text){
-					$self->msg("page content not defined", 'error');
+					$self->msg(0, "page content not defined", 'error');
 					next;
 				}
 				if(not $self->is_allowed(\$text, $page)){
-					$self->msg("  not allowed") if $self->{'verbosity'} > 1;
+					$self->msg(2, "  not allowed");
 					next;
 				}
 				my $text_bak = $text;
@@ -1931,7 +2041,7 @@ sub syntaxCheck{
 						++$found;
 					}
 				}
-				$self->msg("  $found replacements") if $self->{'verbosity'} > 1;
+				$self->msg(2, "  $found replacements");
 				$self->time_management();
 				$self->save_wiki_page($page, $summary, \$text, \$text_bak);
 			}
@@ -1944,7 +2054,7 @@ sub syntaxCheck{
 			@{$self->{'time_stack'}} >= $self->{'max_edits_per_min'}){
 			my $time_diff = time - $self->{'time_stack'}->[0];
 			if($time_diff < 60){
-				$self->msg('  ...waiting '.(60-$time_diff)." seconds") if $self->{'verbosity'} > 0;
+				$self->msg(1, '  ...waiting '.(60-$time_diff)." seconds");
 				sleep(60 - $time_diff);
 			}
 			shift @{$self->{'time_stack'}};
@@ -1981,7 +2091,7 @@ sub syntaxCheck{
 		my $max_num_days_age = 5;
 		my $edit_filter_name = 'Bearbeitungsfilter';
 		my $lt_page    = 'Wikipedia:'.$edit_filter_name.'/latest topics';
-		# https://de.wikipedia.org/w/api.php?action=query&generator=allpages&gapnamespace=4&gapprefix=Bearbeitungsfilter/&gapfilterredir=nonredirects&gaplimit=500&prop=info|revisions&rvprop=content|timestamp
+		# api.php?action=query&generator=allpages&gapnamespace=4&gapprefix=Bearbeitungsfilter/&gapfilterredir=nonredirects&gaplimit=500&prop=info|revisions&rvprop=content|timestamp
 		$self->{'mw_api'}->{config}->{api_url} = $self->{'mw_apiurl'};
 		my $pages = [
 			sort {$b->{'revisions'}->[0]->{'timestamp'} cmp $a->{'revisions'}->[0]->{'timestamp'}}
@@ -2001,7 +2111,7 @@ sub syntaxCheck{
 		}];
 		my %new_topics;
 		for my $page(@$pages){
-			#$self->msg(" $page->{'revisions'}->[0]->{'timestamp'}: $page->{title}") if $self->{'verbosity'} > 1;
+			#$self->msg(2, " $page->{'revisions'}->[0]->{'timestamp'}: $page->{title}");
 			my $npost = $self->newest_post_info($page->{'revisions'}->[0]->{'*'});
 			next unless defined $npost->{'thread'};
 			++$i;
@@ -2100,7 +2210,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 					# todo: how to cope with cat dead?
 					next if $mt_type eq 'cat dead';# and defined $$text 
 					#	and $$text =~/(?:[cC]ategory|[kK]ategorie)\s*:\s*[nN]ekrolog/;
-					$self->msg("check '$mt_type'") if $self->{'verbosity'} > 0;
+					$self->msg(1, "check '$mt_type'");
 					my $ml = "User:CamelBot/maintenance list/$mt_type";
 					my $ml_text = $self->{'mw_bot'}->get_text($ml) // '';
 					my $ml_text_bak = $ml_text;
@@ -2116,7 +2226,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 						$wikitable = $2;
 						$outro = $3;
 					}else{
-						$self->msg('could not fetch table. resetting page.', 'notice') if $self->{'verbosity'} > 0;
+						$self->msg(1, 'could not fetch table. resetting page.', 'notice');
 						$wikitable = '{| '.$tablestyle->{'table'}."\n".
 							"! page !! detected by CamelBot\n".
 							'|}';
@@ -2128,7 +2238,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 					$table->{'body'} = [grep {
 							my $text = '';
 							if(defined $new_entry and $_->[0] eq $new_entry){
-								$self->msg("page '$page' already in list") if $self->{'verbosity'} > 0;
+								$self->msg(1, "page '$page' already in list");
 								$already_in_list = 1;
 							}elsif($_->[0] =~ /^\[\[(.*)\]\]$/){
 								my $page_with_asin = $1;
@@ -2139,7 +2249,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 					];
 					if(defined $new_entry and $already_in_list==0){
 						# add new list entry
-						$self->msg("add new list entry '$page'") if $self->{'verbosity'} > 0;
+						$self->msg(1, "add new list entry '$page'");
 						push @{$table->{'body'}}, [$new_entry, strftime("%Y-%m-%d", gmtime())];
 					}
 					$maintenance_lists->{$mt_type} = {}; # reset and refill list
@@ -2159,9 +2269,9 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			return 1;
 		}else{
 			if(defined $page){
-				$self->msg("could not fetch page '$page'. maybe deleted already", 'notice') if $self->{'verbosity'} > 0;
+				$self->msg(1, "could not fetch page '$page'. maybe deleted already", 'notice');
 			}else{
-				$self->msg('no page and no text defined. this seems senseless.', 'notice') if $self->{'verbosity'} > 0;
+				$self->msg(1, 'no page and no text defined. this seems senseless.', 'notice');
 			}
 			return 0;
 		}
@@ -2174,15 +2284,16 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		my $filename_dest = shift // $filename_src;
 		my $data = $self->read_file_binary($filename_src);
 		# check, whether file exists already. If so, compare. don't upload, if same.
-		$self->msg(" downloading file if existant") if $self->{'verbosity'} > 1;
+		$self->msg(2, " downloading file if existant");
 		my $oldfile = $self->{'mw_api'}->download({'title' => 'File:'.$filename_dest});
 		if(not defined $oldfile or $self->{'mw_api'}->{error}->{code}!=0){
-			$self->msg($self->{'mw_api'}->{error}->{code} . ': ' . $self->{'mw_api'}->{error}->{details});
+			$self->msg(0, $self->{'mw_api'}->{error}->{code} . ': ' . 
+				$self->{'mw_api'}->{error}->{details});
 			return 0;
 		}
-		$self->msg(" downloaded file (if existant)") if $self->{'verbosity'} > 2;
+		$self->msg(3, " downloaded file (if existant)");
 		if($oldfile eq '' or $oldfile ne $$data){
-			$self->msg(" trying to upload new file") if $self->{'verbosity'} > 2;
+			$self->msg(3, " trying to upload new file");
 			if(!$self->{'simulation'}){
 				# upload
 				#$mw->edit({
@@ -2199,7 +2310,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			}
 			return 1;
 		}else{
-			$self->msg("won't force uploading. file is already online.");
+			$self->msg(1, "won't force uploading. file is already online.");
 			return 0;
 		}
 	}
@@ -2332,10 +2443,8 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			$rc_msg{'diffbytes'} = $dataset->[8] - $dataset->[7];
 			push @$rc_pages, \%rc_msg;
 		}
-		if($self->{'camelbot'}->{'verbosity'} > 1
-				or $self->{'camelbot'}->{'verbosity'} > 0 and @$table > 50
-		){
-			$self->{'camelbot'}->msg('got '.(0+@$table).' entries.');
+		if($self->{'camelbot'}->{'verbosity'} >= 2 or @$table > 50){
+			$self->{'camelbot'}->msg(1, 'got '.(0+@$table).' entries.');
 		}
 		return $rc_pages;
 	}
@@ -2352,9 +2461,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		while(my ($title, $timestamp_unix) = each %{$self->{'rc_pages_shortterm'}}){
 			if($timestamp_unix + $self->{'delay_short'} < $now){
 				delete $self->{'rc_pages_shortterm'}->{$title};
-				if($camelbot->{'verbosity'} > 1){
-					$camelbot->msg(' short term update of page: '. $title);
-				}
+				$camelbot->msg(2, ' short term update of page: '. $title);
 				push @updList_shortterm, $title;
 				last if @updList_shortterm >= $max_pages_per_call;
 			}
@@ -2363,16 +2470,14 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		while(my ($title, $timestamp_unix) = each %{$self->{'rc_pages_midterm'}}){
 			if($timestamp_unix + $self->{'delay'} < $now){
 				delete $self->{'rc_pages_midterm'}->{$title};
-				if($camelbot->{'verbosity'} > 1){
-					$camelbot->msg(' mid term update of page: '. $title);
-				}
+				$camelbot->msg(2, ' mid term update of page: '. $title);
 				push @updList_midterm, $title;
 				last if @updList_midterm >= $max_pages_per_call;
 			}
 		}
 		my $numArticles = scalar(@updList_shortterm);
-		if($numArticles >= 100 and $camelbot->{'verbosity'} > 0){
-			$camelbot->msg("starting notification check of $numArticles (of " . 
+		if($numArticles >= 100){
+			$camelbot->msg(1, "starting notification check of $numArticles (of " . 
 				($numArticles + keys(%{$self->{'rc_pages_shortterm'}})) . ") articles.");
 		}
 		# all pages in @updList_shortterm shall be treated now.
@@ -2380,21 +2485,21 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			# notifier on particular edits; there needs to be some delay, because 
 			# otherwise it may occur that the notification is faster than the saving 
 			# process itself.
-			$camelbot->msg("fetch page '$page'.") if $camelbot->{'verbosity'} > 2;
+			$camelbot->msg(3, "fetch page '$page'.");
 			$camelbot->notifier($page);
 		}
-		if($numArticles >= 100 and $camelbot->{'verbosity'} > 1){
-			$camelbot->msg("end of notification check of $numArticles articles.");
+		if($numArticles >= 100){
+			$camelbot->msg(2, "end of notification check of $numArticles articles.");
 		}
 		# all pages in @updList_midterm shall be treated now.
 		my $cnt = 0;
 		$numArticles = scalar(@updList_midterm);
-		if($numArticles >= 100 and $camelbot->{'verbosity'} > 0){
-			$camelbot->msg("starting mid term checks of $numArticles (of " . 
+		if($numArticles >= 100){
+			$camelbot->msg(1, "starting mid term checks of $numArticles (of " . 
 				($numArticles + keys(%{$self->{'rc_pages_midterm'}})) . ") articles.");
 		}
 		for my $page(@updList_midterm){
-			$camelbot->msg("fetch page '$page' (".(++$cnt).").") if $camelbot->{'verbosity'} > 2;
+			$camelbot->msg(3, "fetch page '$page' (".(++$cnt).").");
 			my $text = $camelbot->{'mw_bot'}->get_text($page);
 			if(defined $text and $camelbot->is_allowed(\$text, $page)){
 				my $text_bak = $text;
@@ -2409,13 +2514,12 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 				$camelbot->update_maintenance_lists($page, \$text, 'all_types', 
 					$self->{'rc_pages_maintenance'});
 			}else{
-				if($camelbot->{'verbosity'} > 1){
-					$camelbot->msg("could not fetch page '$page'. maybe deleted already", 'notice');
-				}
+				$camelbot->msg(2, "could not fetch page '$page'. maybe deleted already", 
+					'notice');
 			}
 		}
-		if($numArticles >= 100 and $camelbot->{'verbosity'} > 1){
-			$camelbot->msg("end of mid term checks of $numArticles articles.");
+		if($numArticles >= 100){
+			$camelbot->msg(2, "end of mid term checks of $numArticles articles.");
 		}
 	}
 
@@ -2439,11 +2543,11 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 					$self->{'rc_pages_shortterm'}->{$rc_msg->{'page_with_ns'}} = 
 						$rc_msg->{'timestamp_unix'};
 				}
-				$camelbot->msg('new rc: ' . 
+				$camelbot->msg(2, 'new rc: ' . 
 					($self->{'rc_pages_midterm'}->{$rc_msg->{'page_with_ns'}} - $self->{'start_ts'}) .
 					' (#pages in stack: ' . scalar(keys %{$self->{'rc_pages_midterm'}}) . ') ' . 
 					$rc_msg->{'page_with_ns'} . ', editor = ' . $rc_msg->{'user'}
-				) if $camelbot->{'verbosity'} > 1;
+				);
 				# check if page is on a maintenance list
 				my $text = undef;
 				while(my ($type, $pages) = each %{$self->{'rc_pages_maintenance'}}){
@@ -2479,14 +2583,14 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			# wait for $sleep_delay seconds before sending a query to db again
 			if($last_check + $sleep_delay > time){
 				my $sleep_time = $sleep_delay + $last_check - time;
-				$camelbot->msg("sleep $sleep_time seconds") if $camelbot->{verbosity} > 1;
+				$camelbot->msg(2, "sleep $sleep_time seconds");
 				sleep($sleep_time);
 			}
 			$last_check = time;
-			$camelbot->msg('get new rc pages from db') if $camelbot->{verbosity} > 1;
+			$camelbot->msg(2, 'get new rc pages from db');
 			my $new_rc_pages = $self->get_rc_via_db($continue_timestamp);
 			# delete multiple entries of same page
-			$camelbot->msg('delete multiple entries') if $camelbot->{verbosity} > 1;
+			$camelbot->msg(2, 'delete multiple entries');
 			my %dbl_counter;
 			map {
 				if(defined $dbl_counter{$_->{'page_with_ns'}}){
@@ -2506,7 +2610,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 						and $new_rc_pages->[-1]->{'timestamp'} eq $continue_timestamp){
 					pop @$new_rc_pages;
 				}
-				$camelbot->msg('got '.(0+@$new_rc_pages).' new pages') if $camelbot->{verbosity} > 0;
+				$camelbot->msg(1, 'got '.(0+@$new_rc_pages).' new pages');
 				$self->put_new_rc($new_rc_pages);
 			}
 		}
@@ -2541,11 +2645,11 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		my ($self, $message) = @_;
 		my $camelbot = $self->{'camelbot'};
 		# print everything what is said to you
-		$camelbot->msg("$message->{who}: $message->{body}") if $camelbot->{'verbosity'} > 3;
+		$camelbot->msg(4, "$message->{who}: $message->{body}");
 
 		# general
 		if(defined $message->{address} and $message->{address} eq $self->{nick}){
-			$camelbot->msg($message->{who}.': '.$message->{body}) if $camelbot->{'verbosity'} > 1;
+			$camelbot->msg(2, $message->{who}.': '.$message->{body});
 			# help
 			if($message->{body}=~/^(?:help|was machst du\?|was kannst du\?)/){
 				$self->reply($message, $self->help());
@@ -2624,7 +2728,7 @@ if(defined $params->{'http-status'}){
 	);
 	for my $url(@urls){
 		my $response_code = $camelbot->get_http_status($url);
-		$camelbot->msg($response_code.' '.$url);
+		$camelbot->msg(1, $response_code.' '.$url);
 		sleep 5;
 	}
 }
@@ -2733,9 +2837,9 @@ if($params->{'rc-monitoring'}){
 		my $camelbot_rc = CamelBotRC->new($camelbot);
 		$camelbot_rc->db_rc_monitoring();
 	}else{
-		$camelbot->msg('not implemented', 'error');
+		$camelbot->msg(0, 'not implemented', 'error');
 	}
-	$camelbot->msg('leaving');
+	$camelbot->msg(1, 'leaving');
 }
 
 if(defined $params->{'save-as-html'}){
@@ -2756,7 +2860,8 @@ if(defined $params->{'save-as-html'}){
 	my $images_directory = 'images';
 	mkdir $images_directory unless -d $images_directory;
 	mkdir $css_directory unless -d $css_directory;
-	$headhtml =~ s/<link rel="stylesheet" href=\K"([^"]*)"/download_css($1, $css_directory, $images_directory)/ge;
+	$headhtml =~ s/<link rel="stylesheet" href=\K"([^"]*)"/
+		$camelbot->download_css($1, $css_directory, $images_directory)/ge;
 	# get image files
 	my @images = ($html =~ /<a href="\/wiki\/File:([^"]+)" [^>]*\bclass="image"/g);
 	my $no_warn_files = [];
@@ -2779,6 +2884,14 @@ if(defined $params->{'save-as-html'}){
 	write_file($htmlfilename, {binmode => ':utf8'}, $html_cleaned);
 }
 
+if(defined $params->{'search-sbl-blocked-log'}){
+	my $blocked_edits = $camelbot->search_sbl_blocked_log(
+		qr/$params->{'search-sbl-blocked-log'}/);
+	for my $edit(@$blocked_edits){
+		print "$edit->{'timestamp'}, $edit->{'url'}, $edit->{'user'}\n";
+	}
+}
+
 if($params->{'text-replacement'}){
 	my %options;
 # choose pages
@@ -2787,7 +2900,7 @@ if($params->{'text-replacement'}){
 	#$options{'ucstart'}       = '2011-12-14T00:00:00Z';
 	#$options{'ucend'}         = undef; #'2010-12-14T00:00:00Z';
 	#$options{'uclimit'}       = 269;
-	#$options{'pages'}         = [keys %{get_user_contribs(\%options)}];
+	#$options{'pages'}         = [keys %{$camelbot->get_user_contribs(\%options)}];
 # by whatlinkshere
 	use utf8;
 	$options{'pages'}         = [
@@ -2897,7 +3010,7 @@ if($params->{'upload'}){
 	die "error in upload: file '$source' not found!\n" unless -e $source;
 	die "error in upload: summary not defined!\n" unless defined $summary;
 	die "error in upload: destination filename not defined!\n" unless defined $dest;
-	$camelbot->msg("uploading file '$source' as '$dest' in wiki") if $params->{'verbose'} > 0;
+	$camelbot->msg(1, "uploading file '$source' as '$dest' in wiki");
 	$camelbot->upload_file($source, $summary, $dest);
 }
 
@@ -2910,7 +3023,7 @@ if($params->{'usercontribs'}){
 	$camelbot->get_user_contribs(\%options);
 }
 
-$camelbot->msg('finished') if $params->{'verbose'} > 1;
+$camelbot->msg(2, 'finished');
 
 __END__
 
@@ -2949,6 +3062,8 @@ mediawiki/wikipedia options:
                                 irc - an irc bot
                                 db  - an db connection
      --save_as_html=s          saves a given wiki page as local html-file
+     --search-sbl-blocked-log=s search the list of blocked edits (blocked by sbl) 
+                                  for a given url-regexp
  -t, --test                    don't change anything, just print possible changes
      --update-editfilter-index update edit filter index (at w:de)
      --upload                  upload a file
@@ -3033,6 +3148,10 @@ or a db (I<type>==db) connection to a "real time" db.
 
 parses wikitext of given page and saves result to file with same name but with 
 extension .html.
+
+=item B<--search-sbl-blocked-log>=I<regexp>
+
+search the log of edits blocked by sbl for a given url-regexp I<regexp>
 
 =item B<--test>, B<-t>
 
