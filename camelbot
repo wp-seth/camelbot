@@ -11,7 +11,7 @@ use Getopt::Long qw(:config bundling); # cli params
 use Pod::Usage;            # cli params help
 
 # global vars
-$main::VERSION = '1.13.20150221';
+$main::VERSION = '1.14.20150222';
 
 # packages: CamelBot, CamelBotRC, CamelBotIRC
 #
@@ -66,7 +66,7 @@ $main::VERSION = '1.13.20150221';
 #
 # sub delete_marked_pages
 # 	delete pages that are in a special category
-# 
+#
 # sub delete_wiki_page
 # 	deletes a wiki page
 #
@@ -267,10 +267,10 @@ sub syntaxCheck{
 		'very-verbose' => sub { $params{'verbose'} = 2;},
 		'verbose|v:+',
 		# auto_version will not auto make use of 'V'
-		'version|V' => sub { Getopt::Long::VersionMessage();}, 
+		'version|V' => sub { Getopt::Long::VersionMessage();},
 		# auto_help will not auto make use of 'h'
 		'help|?|h' => sub { Getopt::Long::HelpMessage(
-				-verbose  => 99, 
+				-verbose  => 99,
 				-sections => 'NAME|SYNOPSIS|EXAMPLES');},
 		'man' => sub { pod2usage(-exitval=>0, -verbose=>2);},
 	) or pod2usage(-exitval=>2);
@@ -310,7 +310,7 @@ sub syntaxCheck{
 	use WWW::Mechanize;         # big web browser
 
 	sub new{
-		my $class = shift; 
+		my $class = shift;
 		my $params = shift;
 		my $current_year = strftime("%Y", gmtime());
 		my $self = bless {
@@ -327,6 +327,9 @@ sub syntaxCheck{
 			're_editfilter'  => qr/^Wikipedia:Bearbeitungsfilter\/
 					(?:\d+|Antr\xe4ge$|Fehlerkennungen$|(?:Regelp|P)r\xfcfung$)/x,
 			're_url_class'   => qr/[^\]\[<>"'\x00-\x20\x7F)]|\)(?!\s)/,
+			're_url_rear'    => qr/ # no trailing points
+				(?:[^\]\[<>"'\x00-\x20\x7F)]|\)(?!\s))*
+				(?:[^\]\[<>"'\x00-\x20\x7F).]|\)(?!\s))/x,
 			're_maintenance' => {
 				'ASIN'      => qr/\bASIN[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/,
 				'cat dead'  => qr/\[\[\s*(?i:category|kategorie):\s*[Gg]estorben[\s|_]$current_year\s*(?:\|[^\]]*)?\]\]/,
@@ -452,27 +455,42 @@ sub syntaxCheck{
 		# == link fixes ==
 		# === double protocol ===
 		$changes->{'double protocol'} = $self->test_and_replace($text, 
-			qr/(?:(?:http:|(?<=\[))\/\/)+(https?):?\/\/($self->{'re_url_class'}+)/m, 
+			qr/(?:(?:http:|(?<=\[))\/\/)+(https?):?\/\/($self->{'re_url_rear'})/m, 
 			'"$1:\/\/$2"');
-		# === technically superfluous external links ===
-		if($page ne 'Hypertext Transfer Protocol Secure' and 
-			 $page ne 'Hypertext_Transfer_Protocol_Secure'){
-			$changes->{'lf pseudo-external links'} = $self->test_and_replace($text, 
-				qr/\[
-					{1,2}(https?:\/\/de\.wikipedia\.org\/wiki\/[^\]|\x20\x23?]++
-					(?:\x23(?!mediaviewer)[^\]|\x20?]+)?)\s
-					([^\]]+)
-				\]{1,2}/mx, 
-				'"[[".$self->url2title($1).($self->url2title($1) eq $2 ? "" : "|$2")."]]"');
-		}
+		# === missing brackets ===
+		$changes->{'missing bracket'} = $self->test_and_replace($text, 
+			qr/(<ref>)\s*\[\s*(https?:\/\/$self->{'re_url_rear'})[\s.]*+(<\/ref>)/m, 
+			'"$1\x5b$2]$3"');
 		# === specific domains ===
 		# see [https://de.wikipedia.org/w/index.php?title=MediaWiki_Diskussion:
 		# Spam-blacklist&oldid=136131974#
 		# www.denkmalschutz.de_.22.26cHash.3D.5B0-9a-f.5D.2B.22_entfernen]
 		$changes->{'lf denkmalschutz.de'} = $self->test_and_replace($text, 
-			qr/http:\/\/www.denkmalschutz.de\/($self->{'re_url_class'}+?)\K
+			qr/http:\/\/www.denkmalschutz.de\/$self->{'re_url_class'}+?\K
 			&cHash=[0-9a-f]+/mx, 
 			'""',);
+		# === unicode character 0x200e before categories ===
+		$changes->{'u200e'} = $self->test_and_replace($text, 
+			qr/\x{200e}(?=\]\])/m, 
+			'""');
+		# == optional fixes==
+		if(scalar(grep {$_>0} values %$changes) >= 0){
+			# === technically superfluous external links ===
+			if($page ne 'Hypertext Transfer Protocol Secure' and 
+				 $page ne 'Hypertext_Transfer_Protocol_Secure'){
+				$changes->{'lf pseudo-external links'} = $self->test_and_replace($text, 
+					qr/(?<!<ref>)\[{1,2}
+						(https?:\/\/de\.wikipedia\.org\/wiki\/[^\]|\x20\x23?]++
+						(?:\x23(?!mediaviewer)[^\]|\x20?]+)?)\s
+						([^\]]+)
+					\]{1,2}/mx, 
+					'"[[".$self->url2title($1).($self->url2title($1) eq $2 ? "" : "|$2")."]]"');
+			}
+			# === redundant internal link description ===
+			$changes->{'redundant link description'} = $self->test_and_replace($text, 
+				qr/\[\[\s*+([^|\]\[]+\S)\s*\|\s*+\1\s*+\]\]/m, 
+				'"[[$1]]"');
+		}
 		# === tests ===
 		#$self->test_and_replace($text, 
 		#		qr/seth sagt: hallo camelbot!/m, 
@@ -494,7 +512,7 @@ sub syntaxCheck{
 			}) or die $self->{'mw_api'}->{'error'}->{'code'} . ': ' . 
 				$self->{'mw_api'}->{'error'}->{'details'};
 			$self->{'namespacealiases'} = {
-				map { 
+				map {
 					($_->{'*'} => $_->{'id'});
 				} @{$res->{'query'}->{'namespacealiases'}}
 			};
@@ -618,7 +636,7 @@ sub syntaxCheck{
 		if(defined $timestamp_end){
 			$db_table = $self->_db_simplequery(['
 					SELECT '.$rows.'
-					FROM `recentchanges` 
+					FROM `recentchanges`
 					WHERE `rc_timestamp`>=%s
 						AND `rc_timestamp`<=%s
 						AND `rc_namespace`=0
@@ -628,8 +646,8 @@ sub syntaxCheck{
 		}else{
 			$db_table = $self->_db_simplequery(['
 					SELECT '.$rows.'
-					FROM `recentchanges` 
-					WHERE `rc_timestamp`>=%s 
+					FROM `recentchanges`
+					WHERE `rc_timestamp`>=%s
 						AND `rc_namespace`=0
 						AND `rc_log_type` IS NULL
 					ORDER BY `rc_timestamp`
@@ -643,7 +661,7 @@ sub syntaxCheck{
 		my $lang = shift // 'de';
 		my $url_re = shift // '.';
 		# mariadb does not know perl's /(?^)/ pattern
-		$url_re =~ s/\(\?\K\^//g; 
+		$url_re =~ s/\(\?\K\^//g;
 		my $return_header = 1;
 		my $db_table;
 		my $rows = [
@@ -657,7 +675,7 @@ sub syntaxCheck{
 		$rows = join ', ', map {$_ = '`'.$_.'`'} @$rows;
 		$db_table = $self->_db_simplequery(['
 				SELECT '.$rows.'
-				FROM `logging` 
+				FROM `logging`
 				WHERE `log_type` = \'spamblacklist\'
 					AND log_params regexp %s
 				ORDER BY `log_timestamp`
@@ -671,7 +689,7 @@ sub syntaxCheck{
 		# wiki dependent
 		my $delete_cat = 'Category:Löschen';
 		utf8::decode($delete_cat);
-		my @pages = grep {!/Template:L.schen/} 
+		my @pages = grep {!/Template:L.schen/}
 			$self->{'mw_bot'}->get_pages_in_category($delete_cat);
 		$self->msg(1, 'found '.(@pages+0).' pages.');
 		$self->msg(2, 'adding manually set pages');
@@ -1960,6 +1978,7 @@ sub syntaxCheck{
 		my $regexp_r = shift;
 		my $strpos = 0;
 		my $array_of_changes = [];
+		$self->msg(3, "   ".$regexp_s);
 		my $numChanges = $$text=~s/$regexp_s/
 			my $match = ${^MATCH};
 			my $prematch = ${^PREMATCH};
@@ -1971,6 +1990,7 @@ sub syntaxCheck{
 			push(@$array_of_changes, [$match, $replaced]); 
 			$replaced;
 			/gpme;
+		$numChanges = 0 if $numChanges eq '';
 		if($self->{'verbosity'} >= 1){
 			for my $repl(@$array_of_changes){
 				$self->msg(1, "   ".$repl->[0]);
@@ -2706,6 +2726,12 @@ my $camelbot = CamelBot->new({
 	'cliparams'   => $params,
 });
 
+#used for debugging only:
+#my $text = $camelbot->{'mw_bot'}->get_text('...');
+#my $changes = $camelbot->cleanup_wiki_page(\$text, 'moep');
+#print Dumper $changes;
+#exit 1;
+
 if($params->{'cat-add'}){
 	my $pages = [
 		# list of articles {{{
@@ -3085,7 +3111,7 @@ mediawiki/wikipedia options:
      --save_as_html=s          saves a given wiki page as local html-file
      --search-sbl-blocked-log=s search the list of blocked edits (blocked by sbl) 
                                   for a given url-regexp
-     --search-sbl-blocked-log-lang=s search the list of blocked edits (blocked by
+     --search-sbl-blocked-log-lang=s search the list of blocked edits (blocked by sbl)
                                   for a given url-regexp. search in several wikis.
  -t, --test                    don't change anything, just print possible changes
      --update-editfilter-index update edit filter index (at w:de)
