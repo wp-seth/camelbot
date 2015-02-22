@@ -11,7 +11,7 @@ use Getopt::Long qw(:config bundling); # cli params
 use Pod::Usage;            # cli params help
 
 # global vars
-$main::VERSION = '1.14.20150222';
+$main::VERSION = '1.15.20150222';
 
 # packages: CamelBot, CamelBotRC, CamelBotIRC
 #
@@ -29,6 +29,9 @@ $main::VERSION = '1.14.20150222';
 #
 # sub api_cont
 # 	use MediaWiki::API using 'continue' for a loop
+#
+# sub api_simple
+# 	use MediaWiki::API and catch errors
 #
 # sub cat_add
 # 	adds a given bunch of pages to a given category by adding [[category:new]] at 
@@ -353,20 +356,35 @@ sub syntaxCheck{
 		my $query      = shift;
 		my $mw_options = shift;
 		my $finished = 0;
-		my $pages = $self->{'mw_api'}->api($query, $mw_options) 
-			or die $self->{'mw_api'}->{'error'}->{'code'}.': ' . 
-				$self->{'mw_api'}->{'error'}->{'details'};
-		if(defined $pages->{'continue'}){
-			while(my ($k, $v) = each(%{$pages->{'continue'}})){
+		my $api_result = $self->api_simple($query, $mw_options);
+		if(defined $api_result->{'continue'}){
+			while(my ($k, $v) = each(%{$api_result->{'continue'}})){
 				$query->{$k} = $v;
 			}
 		}else{
 			$finished = 1;
 		}
-		#if(defined $pages->{'batchcomplete'}){
-		#	print Dumper $pages->{'batchcomplete'};
+		#if(defined $api_result->{'batchcomplete'}){
+		#	print Dumper $api_result->{'batchcomplete'};
 		#}
-		return ($pages, $finished);
+		return ($api_result, $finished);
+	}
+
+	sub api_simple{
+		my $self         = shift;
+		my $query        = shift;
+		my $mw_options   = shift;
+		my $die_on_error = shift // 1;
+		my $api_result = $self->{'mw_api'}->api($query, $mw_options);
+		unless(defined $api_result){
+			my $err = 
+				$self->{'mw_api'}->{'error'}->{'code'}.': ' . 
+				$self->{'mw_api'}->{'error'}->{'details'};
+			my $caller_increment = 1;
+			$self->msg(0, $err, 'error', $caller_increment);
+			die $err if $die_on_error;
+		}
+		return $api_result;
 	}
 
 	sub cat_add{
@@ -505,12 +523,11 @@ sub syntaxCheck{
 		unless(defined $self->{'namespaces'}){
 			# get namespaces
 			$self->{'namespaces'} = {$self->{'mw_bot'}->get_namespace_names()};
-			my $res = $self->{'mw_api'}->api({
+			my $res = $self->api_simple({
 				'action' => 'query',
 				'meta'   => 'siteinfo',
 				'siprop' => 'namespacealiases',
-			}) or die $self->{'mw_api'}->{'error'}->{'code'} . ': ' . 
-				$self->{'mw_api'}->{'error'}->{'details'};
+			});
 			$self->{'namespacealiases'} = {
 				map {
 					($_->{'*'} => $_->{'id'});
@@ -524,7 +541,6 @@ sub syntaxCheck{
 			$converted = $rev_ns{$ns} // $self->{'namespacealiases'}->{$ns};
 		}
 		$converted = 0 unless defined $converted;
-		#$self->msg(1, "could not resolve '$ns'", 'error') unless defined $converted;
 		return $converted;
 	}
 
@@ -872,9 +888,7 @@ sub syntaxCheck{
 			'titles'         => $titles, 
 		};
 		my $mw_options = {'max' => 1};
-		my $pages = $self->{'mw_api'}->api($query, $mw_options) 
-			or die $self->{'mw_api'}->{'error'}->{'code'}.': ' . 
-				$self->{'mw_api'}->{'error'}->{'details'};
+		my $pages = $self->api_simple($query, $mw_options);
 		my $page_infos;
 		while(my ($page_id, $page_info) = each %{$pages->{'query'}->{'pages'}}){
 			$page_infos->{$page_info->{'title'}} = $page_info;
@@ -902,9 +916,7 @@ sub syntaxCheck{
 		my $rvcont_old;
 		while(!$finished){
 			my $rvcont;
-			my $pages = $self->{'mw_api'}->api($query, $mw_options) 
-				or die $self->{'mw_api'}->{'error'}->{'code'}.': ' . 
-					$self->{'mw_api'}->{'error'}->{'details'};
+			my $pages = $self->api_simple($query, $mw_options);
 			#print Dumper [keys $pages];
 			if(defined $pages->{'continue'}){
 				#print Dumper $pages->{'continue'};
@@ -971,7 +983,8 @@ sub syntaxCheck{
 			#if(defined $ucstart and defined $ucend){
 			#	$self->msg(1, "ucstart = $ucstart, ucend = $ucend") 
 			#}
-			my $tmp = $self->{'mw_api'}->api($query, $mw_options);
+			my $dont_die_on_error = 0; # 0 = dont die; 1 = die
+			my $tmp = $self->api_simple($query, $mw_options, $dont_die_on_error);
 			$ucstart = $tmp->{'query-continue'}->{'usercontribs'}->{'ucstart'};
 			$query->{'ucstart'} = $ucstart;
 			my $usercontribs = $tmp->{'query'}->{'usercontribs'};
@@ -1095,7 +1108,8 @@ sub syntaxCheck{
 				my $mw_options = {'max' => 1};
 				while($ucstart gt $ucend){
 					$self->msg(1, "ucstart = $ucstart, ucend = $ucend");
-					my $tmp = $self->{'mw_api'}->api($query, $mw_options);
+					my $dont_die_on_error = 0; # 0 = dont die; 1 = die
+					my $tmp = $self->api_simple($query, $mw_options, $dont_die_on_error);
 					$ucstart = $tmp->{'query-continue'}->{'usercontribs'}->{'ucstart'};
 					$query->{'ucstart'} = $ucstart;
 					my $usercontribs = $tmp->{'query'}->{'usercontribs'};
@@ -1441,14 +1455,15 @@ sub syntaxCheck{
 		my $verb_threshold = shift;
 		my $msg            = shift;
 		my $type           = shift;
+		my $caller_inc     = shift // 0;
 		return 0 if $self->{'verbosity'} < $verb_threshold;
 		$type = (defined $type ? "$type in ": '');
 		my $timestamp = strftime("%Y-%m-%d %H:%M:%S", gmtime());
 		# my ($package, $filename, $line, $subr, $has_args, $wantarray, $evaltext, 
 		# $is_require, $hints, $bitmask, $hinthash) = caller(0);
-		my @callers = caller(0);
+		my @callers = caller(0 + $caller_inc);
 		my $line = $callers[2];
-		@callers = caller(1);
+		@callers = caller(1 + $caller_inc);
 		my $subr = $callers[3] // '[no sub]';
 		print "$timestamp $type$subr:$line: $msg\n";
 		return 1;
@@ -1577,12 +1592,11 @@ sub syntaxCheck{
 	sub parse_page{
 		my $self = shift;
 		my $page = shift;
-		my $text = $self->{'mw_api'}->api( {
+		my $text = $self->api_simple({
 			action => 'parse',
 			page => $page,
 			prop => 'text|headhtml',
-		}) or die $self->{'mw_api'}->{error}->{code} . ': ' . 
-				$self->{'mw_api'}->{error}->{details};
+		});
 		my $title = $text->{'parse'}->{'title'};
 		my $html = $text->{'parse'}->{'text'}->{'*'};
 		my $headhtml = $text->{'parse'}->{'headhtml'}->{'*'};
@@ -1627,12 +1641,11 @@ sub syntaxCheck{
 	sub parse_wikitext{
 		my $self = shift;
 		my $wikitext = shift;
-		my $text = $self->{'mw_api'}->api( {
+		my $text = $self->api_simple({
 			action => 'parse',
 			text => $wikitext,
 			prop => 'text',
-		}) or die $self->{'mw_api'}->{error}->{code} . 
-			': ' . $self->{'mw_api'}->{error}->{details};
+		});
 		my $html = $text->{'parse'}->{'text'}->{'*'};
 		# delete final comments
 		$html =~s/\n\n<!--\s+NewPP.*?\n-->$//s;
@@ -1664,10 +1677,10 @@ sub syntaxCheck{
 			'mms://'
 		);
 		my $re_prot = join('|', @wgUrlProtocols);
-		my $ext_link_url_class = qr/[^\][<>"\x00-\x20\x7F\p{Zs}]/; 
+		my $ext_link_url_class = qr/[^\][<>"\x00-\x20\x7F\p{Zs}]/;
 		my $re_url_wo_prot =     qr/$ext_link_url_class+/;
 		my $re_descr = qr/[^\]\x00-\x08\x0a-\x1F]*?/;
-		my $mExtLinkBracketedRegex = qr/\[(($re_prot)$re_url_wo_prot) *($re_descr)\]'/; 
+		my $mExtLinkBracketedRegex = qr/\[(($re_prot)$re_url_wo_prot) *($re_descr)\]'/;
 		# $1 = url, $2 = prot, $3 = descr
 		# split wikitext by links
 		my @bits = split /$mExtLinkBracketedRegex/, $wikitext;
@@ -1806,7 +1819,11 @@ sub syntaxCheck{
 							text     => $$text,
 							bot      => 1,
 							summary  => "Bot: $summary",
-					});
+					}) or $self->msg(0,
+						$self->{'mw_api'}->{'error'}->{'code'} . ': ' . 
+						$self->{'mw_api'}->{'error'}->{'details'},
+						'error'
+					);
 				}else{
 					$self->{'user_answer'} = '';
 				}
@@ -1987,7 +2004,7 @@ sub syntaxCheck{
 			if(!$self->check_external_link(\$prematch, \$replaced)){
 				$replaced = $match;
 			}
-			push(@$array_of_changes, [$match, $replaced]); 
+			push(@$array_of_changes, [$match, $replaced]);
 			$replaced;
 			/gpme;
 		$numChanges = 0 if $numChanges eq '';
@@ -2411,7 +2428,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 	$| = 1; # deactivate buffering, so flush all the time
 
 	sub new{
-		my $class    = shift; 
+		my $class    = shift;
 		my $camelbot = shift;
 		my $self = bless {
 			'camelbot'             => $camelbot,
@@ -2462,8 +2479,8 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			$rc_msg{'page'}      = $dataset->[3];
 			$rc_msg{'page'} =~ s/_/ /g;
 			$rc_msg{'summary'}   = $dataset->[4];
-			$rc_msg{'page_with_ns'} = $dataset->[2] == 0 ? $dataset->[3] : 
-				$self->{'camelbot'}->convert_ns($dataset->[2]) . ':' . $dataset->[3];
+			$rc_msg{'page_with_ns'} = $rc_msg{'ns_id'} == 0 ? $rc_msg{'page'} : 
+				$self->{'camelbot'}->convert_ns($rc_msg{'ns_id'}) . ':' . $rc_msg{'page'};
 			#$rc_msg{'flags'}     = $dataset->[];
 			#$rc_msg{'url'}       = $dataset->[];
 			$rc_msg{'diffbytes'} = $dataset->[8] - $dataset->[7];
@@ -2651,7 +2668,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 	$| = 1; # deactivate buffering, so flush all the time
 
 	sub new{
-		my $class    = shift; 
+		my $class    = shift;
 		my $camelbot = shift;
 		my $params   = shift;
 		my $self = $class->SUPER::new(%$params);
@@ -2934,7 +2951,7 @@ if(defined $params->{'search-sbl-blocked-log-lang'}){
 	while(my ($lang, $blocked_edits) = each %results){
 		$camelbot->msg(1, "$lang: ".scalar(@$blocked_edits));
 		for my $edit(@$blocked_edits){
-			print "$edit->{'timestamp'}, $edit->{'url'}, $edit->{'user'}; $edit->{'title'}\n"; 
+			print "$edit->{'timestamp'}, $edit->{'url'}, $edit->{'user'}; $edit->{'title'}\n";
 		}
 	}
 }
@@ -2950,7 +2967,7 @@ if($params->{'text-replacement'}){
 	#$options{'pages'}         = [keys %{$camelbot->get_user_contribs(\%options)}];
 # by whatlinkshere
 	use utf8;
-	$options{'pages'}         = [
+	$options{'pages'} = [
 		map {$_->{'title'}} (
 			$camelbot->{'mw_bot'}->what_links_here('Perl/Module/Einführung in Perl-Module'),
 			$camelbot->{'mw_bot'}->what_links_here('Perl/Module/Einführung in Perl-Modul'),
@@ -2962,7 +2979,7 @@ if($params->{'text-replacement'}){
 		)
 	];
 # or explicite
-	#$options{'pages'}         = [
+	#$options{'pages'} = [
 	#	'Perl',
 	#	'Perl Dingens',
 	#];
@@ -2971,7 +2988,7 @@ if($params->{'text-replacement'}){
 
 # search and replace
 #  case 0: link replacement
-	#$options{'pattern'}       = [
+	#$options{'pattern'} = [
 	#	qr/<nowiki>(http:\/\/world.guns.ru\b[^\]]*?\].*?)<\/nowiki>&nbsp;<small>'''\(Achtung: Bitte diese Website nicht aufrufen, da sie gef.hrliche Software verbreitet!\)'''<\/small>/,
 	#	qr/<nowiki>(http:\/\/world.guns.ru\b.*?)<\/nowiki>&nbsp;<small>'''\(Achtung: Bitte diese Website nicht aufrufen, da sie gef.hrliche Software verbreitet!\)'''<\/small>/,
 	#	qr/(?<!\[)(http:\/\/world.guns.ru\b[^ \]]* [^\[\]]+\])/,
