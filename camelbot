@@ -11,7 +11,7 @@ use Getopt::Long qw(:config bundling); # cli params
 use Pod::Usage;            # cli params help
 
 # global vars
-$main::VERSION = '1.15.20150222';
+$main::VERSION = '1.16.20150223';
 
 # packages: CamelBot, CamelBotRC, CamelBotIRC
 #
@@ -93,6 +93,9 @@ $main::VERSION = '1.15.20150222';
 #
 # sub get_pages_by_prefix
 # 	get all pages and their latest content by prefix
+#
+# sub get_sbl_entries
+# 	get all sbl entries of a given wiki
 #
 # sub get_tables_from_wikitext
 # 	tries to return all tables from a given wikitext. (this will fail on tables in 
@@ -194,6 +197,9 @@ $main::VERSION = '1.15.20150222';
 #
 # CamelBot: other functions
 # ---------------
+# sub get_http_content
+# 	return content of a given url
+#
 # sub get_http_status
 # 	return http status code of a given url
 #
@@ -211,6 +217,19 @@ $main::VERSION = '1.15.20150222';
 #
 # sub write_csv
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
+
+## Carp::Always
+#sub _die {
+#  die @_ if ref($_[0]);
+#  if ($_[-1] =~ /\n$/s) {
+#    my $arg = pop @_;
+#    $arg =~ s/(.*)( at .*? line .*?\n$)/$1/s;
+#    push @_, $arg;
+#  }
+#  die &Carp::longmess;
+#}
+#
+#$SIG{__DIE__} = \&_die;
 
 sub syntaxCheck{
 	my %params = ( # default cli params
@@ -300,6 +319,7 @@ sub syntaxCheck{
 	package CamelBot;
 	use Data::Dumper;           # for debugging purposes
 	use DBI;                    # db connection
+	#use Carp;                   # better output on errors for debugging purposes
 	use File::Slurp qw(write_file); # read/write files
 	use IPC::Run;               # used for tidy
 	use LWP::UserAgent;         # fast, small web browser
@@ -310,7 +330,7 @@ sub syntaxCheck{
 	use Time::Local;            # timegm
 	use Tk::DiffText;           # graphical diff tool
 	use URI::Escape;            # uri_unescape
-	use WWW::Mechanize;         # big web browser
+	#use WWW::Mechanize;         # big web browser
 
 	sub new{
 		my $class = shift;
@@ -487,12 +507,12 @@ sub syntaxCheck{
 			qr/http:\/\/www.denkmalschutz.de\/$self->{'re_url_class'}+?\K
 			&cHash=[0-9a-f]+/mx, 
 			'""',);
-		# === unicode character 0x200e before categories ===
-		$changes->{'u200e'} = $self->test_and_replace($text, 
-			qr/\x{200e}(?=\]\])/m, 
-			'""');
 		# == optional fixes==
-		if(scalar(grep {$_>0} values %$changes) >= 0){
+		if(scalar(grep {$_>0} values %$changes) > 0){
+			# === unicode character 0x200e before categories ===
+			$changes->{'u200e'} = $self->test_and_replace($text, 
+				qr/\x{200e}(?=\]\])/m, 
+				'""');
 			# === technically superfluous external links ===
 			if($page ne 'Hypertext Transfer Protocol Secure' and 
 				 $page ne 'Hypertext_Transfer_Protocol_Secure'){
@@ -749,22 +769,18 @@ sub syntaxCheck{
 	}
 
 	sub download_css{
-		my $self   = shift;
-		my $cssurl = shift;
+		my $self       = shift;
+		my $cssurl     = shift;
 		$cssurl =~s/&amp;/&/g;
-		my $css_dir = shift;
+		my $css_dir    = shift;
 		my $images_dir = shift; # todo: save url{...}
 		my $filename = $cssurl;
 		$filename =~s/[^a-zA-Z0-9~_-]/_/g;
 		$filename = "$css_dir/$filename.css";
-		my $mech = WWW::Mechanize->new(
-			'keep_alive' => 1, 'autocheck' => 0, 'timeout' => 10);
-		$mech->agent_alias('Linux Mozilla');
-		$mech->get($cssurl);
-		if($mech->status() != 200){
-			$self->msg(0, 'download of css failed. status: '.$mech->status(), 'error');
+		my ($http_status, $css_content) = get_http_content($cssurl);
+		if($http_status != 200){
+			$self->msg(0, 'download of css failed.', 'error');
 		}else{
-			my $css_content = $mech->content();
 			write_file($filename, $css_content);
 		}
 		return $filename;
@@ -852,6 +868,24 @@ sub syntaxCheck{
 			map {$results[$_->{'id'}] = $_->{'description'}} @{$pages->{'query'}->{'abusefilters'}};
 		}
 		return \@results;
+	}
+
+	sub get_http_content{
+		my $self = shift;
+		my $url = shift;
+		my $lwp = LWP::UserAgent->new(
+			'keep_alive' => 1, 
+			'timeout' => 10, 
+			'agent' => 'Mozilla/5.0'
+		);
+		my $content;
+		my $response = $lwp->get($url);
+		if($response->is_success){
+			$content = $response->decoded_content;
+		}else{
+			$self->msg->(0, $response->status_line, 'error');
+		}
+		return ($response->code, $content);
 	}
 
 	sub get_http_status{
@@ -942,6 +976,39 @@ sub syntaxCheck{
 			#}
 		}
 		return \@results;
+	}
+
+	sub get_sbl_entries{
+		my $self = shift;
+		my $wiki = shift;
+		my $sbl_entries;
+		my $sbl_text = '';
+		if(defined $wiki){
+			if($wiki eq 'meta'){
+				(my $http_status, $sbl_text) = $self->get_http_content(
+					'https://meta.wikimedia.org/w/index.php?' . 
+					'title=Spam_blacklist&action=raw&sb_ver=1'
+				);
+			}else{
+				$self->msg(0, "unsupported param '$wiki'.", 'error');
+			}
+		}else{
+			$sbl_text = $self->{'mw_bot'}->get_text('MediaWiki:Spam-blacklist');
+		}
+		# remove non-pre items
+		if($sbl_text =~ s/.*?<pre\b[^>]*>(.*?)<\/pre>(?:.(?!<pre\b))*/$1/gs){
+			# remove comments
+			$sbl_text =~ s/\s*#.*//g;
+			# remove empty lines
+			$sbl_text =~ s/\n\K\n+//g;
+			# remove preceding and trailing space
+			$sbl_text =~ s/^\s+//;
+			$sbl_text =~ s/\s+$//gm;
+			$sbl_entries = [split /\n/, $sbl_text];
+		}else{
+			$self->msg(0, 'could not read sbl', 'error');
+		}
+		return $sbl_entries;
 	}
 
 	sub get_tables_from_wikitext{
@@ -1411,6 +1478,7 @@ sub syntaxCheck{
 		$self->msg(2, "logging in at $address_params{'host'}...");
 		$self->{'mw_bot'} = MediaWiki::Bot->new({
 			assert      => 'bot',
+			#do_sul      => ($address_params{'host'} =~ /\.wikipedia\.org$/ ? 1 : 0),
 			protocol    => $address_params{'protocol'},
 			host        => $address_params{'host'},
 			path        => $address_params{'path'},
@@ -1896,8 +1964,8 @@ sub syntaxCheck{
 				};
 				$results[-1]->{'url'} =~ s/^.*?"(http[^"]*)".*$/$1/;
 			}
-			$self->msg(1, 'found '.scalar(@results).' matching blocked edits.');
-		}else{ # use api
+			$self->msg(2, 'found '.scalar(@results).' matching blocked edits.');
+		}elsif($lang eq 'de'){ # use api
 			# api.php?action=query&list=logevents&letype=spamblacklist&leprop=ids|title|type|user|timestamp|comment|details&continue=
 			my $query = {
 				'action'         => 'query',
@@ -1937,6 +2005,8 @@ sub syntaxCheck{
 				delete $_->{'action'};
 			} @results;
 			$self->msg(1, "log contains $log_counter entries. found $num_results matching blocked edits.");
+		}else{
+			$self->msg(0, "not defined for lang = '$lang'", 'error');
 		}
 		return \@results;
 	}
@@ -2743,7 +2813,7 @@ my $camelbot = CamelBot->new({
 	'cliparams'   => $params,
 });
 
-#used for debugging only:
+# used for debugging only:
 #my $text = $camelbot->{'mw_bot'}->get_text('...');
 #my $changes = $camelbot->cleanup_wiki_page(\$text, 'moep');
 #print Dumper $changes;
@@ -2943,15 +3013,31 @@ if(defined $params->{'search-sbl-blocked-log'}){
 
 if(defined $params->{'search-sbl-blocked-log-lang'}){
 	my @langs = qw(ca ceb de en es fr it ja nl no pl pt ru sv uk vi war zh);
-	my %results = ();
-	for my $lang(@langs){
-		$results{$lang} = $camelbot->search_sbl_blocked_log(
-			qr/$params->{'search-sbl-blocked-log-lang'}/, $lang);
-	}
-	while(my ($lang, $blocked_edits) = each %results){
-		$camelbot->msg(1, "$lang: ".scalar(@$blocked_edits));
-		for my $edit(@$blocked_edits){
-			print "$edit->{'timestamp'}, $edit->{'url'}, $edit->{'user'}; $edit->{'title'}\n";
+	my @to_check;
+	if($params->{'search-sbl-blocked-log-lang'} eq 'meta'){
+		my $sbl_meta = $camelbot->get_sbl_entries('meta');
+		$camelbot->msg(1, 'found '.scalar(@$sbl_meta).' entries in sbl.');
+		print "{|\n" . 
+			"! regexp || " . (join ' || ', sort @langs) . "\n";
+		for my $regexp(@$sbl_meta[0..1]){
+			my %results = ();
+			for my $lang(@langs){
+				$results{$lang} = $camelbot->search_sbl_blocked_log($regexp, $lang);
+			}
+			print "| $regexp || " . 
+				(join ' || ', (map {scalar(@{$results{$_}})} sort keys %results)) . "\n";
+		}
+	}else{
+		my %results = ();
+		for my $lang(@langs){
+			$results{$lang} = $camelbot->search_sbl_blocked_log(
+				qr/$params->{'search-sbl-blocked-log-lang'}/, $lang);
+		}
+		while(my ($lang, $blocked_edits) = each %results){
+			$camelbot->msg(1, "$lang: ".scalar(@$blocked_edits));
+			for my $edit(@$blocked_edits){
+				print "$edit->{'timestamp'}, $edit->{'url'}, $edit->{'user'}; $edit->{'title'}\n";
+			}
 		}
 	}
 }
