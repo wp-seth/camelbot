@@ -11,7 +11,7 @@ use Getopt::Long qw(:config bundling); # cli params
 use Pod::Usage;            # cli params help
 
 # global vars
-$main::VERSION = '1.16.20150223';
+$main::VERSION = '1.17.20150302';
 
 # packages: CamelBot, CamelBotRC, CamelBotIRC
 #
@@ -1509,7 +1509,7 @@ sub syntaxCheck{
 			}) or die $self->{'mw_api'}->{'error'}->{'code'}.': '.$self->{'mw_api'}->{'error'}->{'details'};
 		}else{
 			unless(defined $self->{'mw_bot'}){
-				$self->msg(0, 'maybe there\'s an expired cookie file. please delete \''. 
+				$self->msg(0, 'check upper/lower case. or maybe there\'s an expired cookie file. please delete \''. 
 					$cookie. '\' and try again.', 'error') if -e $cookie;
 				die("error: could not login.\n");
 			}
@@ -1598,7 +1598,7 @@ sub syntaxCheck{
 		my $page        = shift;
 		utf8::decode($page); # is this necessary?
 		my @hist = $self->{'mw_bot'}->get_history($page, 2);
-		if(@hist==0){
+		if(@hist == 0){
 			$self->msg(1, "page '$page' doesn't seem to exist anymore.", 'notice');
 			return 0;
 		}
@@ -1830,22 +1830,41 @@ sub syntaxCheck{
 			}
 		}else{
 			# find place to insert table and replace table
-			for(@$tables){
+			for my $table(@$tables){
 				%$tablestyle = %$tablestyle_default;
-				$tablestyle->{'table'} = 'class="'.$_->{'class'}.'"' if exists $_->{'class'};
-				my $wikitable = $self->table2wikitext($_, $tablestyle, 1);
-				if(defined $_->{'section'}){
-					my $section = $_->{'section'};
-					if($text =~/^=(=+) ?\Q$section\E ?\1=\n(?:(?!\n=|\n\[\[[cC]ategory:).)*/ms){
-						$text =~ s/^=(=+) ?\Q$section\E ?\1=\n\K(?:(?!\n=|\n\[\[[cC]ategory:).)*/$wikitable/ms;
+				if(exists $table->{'class'}){
+					$tablestyle->{'table'} = 'class="' . $table->{'class'} . '"';
+				}
+				my $wikitable = $self->table2wikitext($table, $tablestyle, 1);
+				if(defined $table->{'section'}){
+					my $section = $table->{'section'};
+					my $re_section_heading = 
+						qr/^=(?<equals>=+)\x20?\Q$section\E\x20?\g{equals}=\n/msx;
+					if($text =~ /$re_section_heading/g){
+						my $table_begin = pos($text); # begin of table to replace
+						my $tmp = substr($text, $table_begin);
+						$tmp =~ /(?=\n(?:=|\[\[[cC]ategory:))/g;
+						my $table_length = pos($tmp); # length of table to replace
+						$text = substr($text, 0, $table_begin) . $wikitable . 
+							substr($tmp, $table_length);
 					}else{
-						die "error: could not create/modify section. please ensure that wiki page [[$page]] either is empty or there exists the section '$section'!\n";
+						$self->msg(0, 
+							'could not create/modify section. please ensure that wiki page ' . 
+								"[[$page]] either is empty or the section '$section' exists!",
+							'error'
+						);
+						die;
 					}
 				}else{
 					if($text =~/(?:^<!--.*?-->\n)?^\{\|.*\|\}/ms){
 						$text =~ s/(?:^<!--.*?-->\n)?^\{\|.*\|\}(\n|)\n*/$wikitable$1/ms;
 					}else{
-						die "error: could not create/modify section. please ensure that wiki page [[$page]] either is empty or there exists the appropriate section!\n";
+						$self->msg(0, 
+							'could not create/modify section. please ensure that wiki page ' . 
+								"[[$page]] either is empty or the appropriate section exists!", 
+							'error'
+						);
+						die;
 					}
 				}
 			}
@@ -2299,9 +2318,14 @@ sub syntaxCheck{
 
 	sub update_maintenance_lists{
 		my $self          = shift;
-		my $page          = shift; # page title or undef; undef means: force update without checking conditions
-		my $text          = shift; # ref to string (or undef if $page is undef)
-		my $type          = shift; # type of maintenance list
+		# page title or undef; undef means: force update without checking conditions
+		#    page,    text => check old pages in list(s) if text matches
+		# no page,    text => check old pages in list(s)
+		#    page, no text => get text from page or leave function
+		# no page, no text => check old pages in list(s)
+		my $page          = shift; 
+		my $text          = shift; # ref to string (or undef)
+		my $type          = shift; # type of maintenance list, "all_types" for all types
 		my $maintenance_lists = shift; # maintenance lists
 		if(defined $page and not defined $text){
 			my $text = $self->{'mw_bot'}->get_text($page);
@@ -2318,18 +2342,17 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			);
 			for my $mt_type(keys %{$self->{'re_maintenance'}}){
 				if(($type eq $mt_type or $type eq 'all_types') and 
-					(not defined $page or $$text=~/$self->{'re_maintenance'}->{$mt_type}/)
+					(not defined $page or $$text =~ /$self->{'re_maintenance'}->{$mt_type}/)
 				){
+					$self->msg(1, "check '$mt_type'");
 					# todo: how to cope with cat dead?
 					next if $mt_type eq 'cat dead';# and defined $$text 
 					#	and $$text =~/(?:[cC]ategory|[kK]ategorie)\s*:\s*[nN]ekrolog/;
-					$self->msg(1, "check '$mt_type'");
 					my $ml = "User:CamelBot/maintenance list/$mt_type";
 					my $ml_text = $self->{'mw_bot'}->get_text($ml) // '';
 					my $ml_text_bak = $ml_text;
 					my $intro = $intros{$mt_type};
 					my $outro = "\n\n[[Kategorie:Wikipedia:Wartungskategorie|$mt_type]]";
-					my $table;
 					my $wikitable;
 					my $tablestyle = {
 						'table'  => 'class="wikitable sortable"',
@@ -2341,37 +2364,43 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 					}else{
 						$self->msg(1, 'could not fetch table. resetting page.', 'notice');
 						$wikitable = '{| '.$tablestyle->{'table'}."\n".
-							"! page !! detected by CamelBot\n".
+							"! page !! date of detection by CamelBot\n".
 							'|}';
 					}
-					$table = $self->wikitable2array(\$wikitable);
-					# check all old entries; search new entry, if not in array, then push
+					# get table content
+					my $table = $self->wikitable2array(\$wikitable);
+					# check all old entries; remove entries if possible;
+					# search new entry, if not in array, then push
 					my $already_in_list = 0;
 					my $new_entry = defined $page ? "[[$page]]" : undef;
 					$table->{'body'} = [grep {
-							my $text = '';
+							my $page_content = '';
 							if(defined $new_entry and $_->[0] eq $new_entry){
 								$self->msg(1, "page '$page' already in list");
 								$already_in_list = 1;
 							}elsif($_->[0] =~ /^\[\[(.*)\]\]$/){
-								my $page_with_asin = $1;
-								$text = $self->{'mw_bot'}->get_text($page_with_asin);
+								my $page_from_list = $1;
+								$page_content = $self->{'mw_bot'}->get_text($page_from_list);
 							}
-							$text =~ /$self->{'re_maintenance'}->{$mt_type}/ or $already_in_list;
+							# return value for grep
+							$page_content =~ /$self->{'re_maintenance'}->{$mt_type}/ 
+								or $already_in_list;
 						} @{$table->{'body'}}
 					];
+					# add new list entry
 					if(defined $new_entry and $already_in_list==0){
-						# add new list entry
 						$self->msg(1, "add new list entry '$page'");
 						push @{$table->{'body'}}, [$new_entry, strftime("%Y-%m-%d", gmtime())];
 					}
-					$maintenance_lists->{$mt_type} = {}; # reset and refill list
+					# reset and refill maintenance list
+					$maintenance_lists->{$mt_type} = {}; 
 					for my $entry(@{$table->{'body'}}){
 						$maintenance_lists->{$mt_type}->{substr($entry->[0], 2, -2)} = 1;
 					}
 					unshift @{$table->{'body'}}, [@{$table->{'header'}}];
 					$table->{'header'} = 1;
 					my $full_auto = 0;
+					# convert array to wikitable
 					$wikitable = $self->table2wikitext($table, $tablestyle, $full_auto);
 					# rebuild page
 					$ml_text = $intro.$wikitable.$outro;
@@ -2589,7 +2618,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			}
 		}
 		my $numArticles = scalar(@updList_shortterm);
-		if($numArticles >= 100){
+		if($numArticles >= 100 or $camelbot->{'verbosity'} >= 2){
 			$camelbot->msg(1, "starting notification check of $numArticles (of " . 
 				($numArticles + keys(%{$self->{'rc_pages_shortterm'}})) . ") articles.");
 		}
@@ -2607,7 +2636,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		# all pages in @updList_midterm shall be treated now.
 		my $cnt = 0;
 		$numArticles = scalar(@updList_midterm);
-		if($numArticles >= 100){
+		if($numArticles >= 100 or $camelbot->{'verbosity'} >= 2){
 			$camelbot->msg(1, "starting mid term checks of $numArticles (of " . 
 				($numArticles + keys(%{$self->{'rc_pages_midterm'}})) . ") articles.");
 		}
@@ -2650,23 +2679,29 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 					and $rc_msg->{'summary'} !~ /\bCamelBot\b.*\b(?:rückgängig gemacht|revertiert)\b/ # don't play edit war
 					and $rc_msg->{'ns_id'} == 0
 			){
+				# add page to mid term list
 				$self->{'rc_pages_midterm'}->{$rc_msg->{'page_with_ns'}} = 
 					$rc_msg->{'timestamp_unix'};
+				# add page to short term list
 				if(time - $rc_msg->{'timestamp_unix'} < $self->{'short_max_age'}){
 					$self->{'rc_pages_shortterm'}->{$rc_msg->{'page_with_ns'}} = 
 						$rc_msg->{'timestamp_unix'};
 				}
+				# print status
 				$camelbot->msg(2, 'new rc: ' . 
-					($self->{'rc_pages_midterm'}->{$rc_msg->{'page_with_ns'}} - $self->{'start_ts'}) .
-					' (#pages in stack: ' . scalar(keys %{$self->{'rc_pages_midterm'}}) . ') ' . 
+					($rc_msg->{'timestamp_unix'} - $self->{'start_ts'}) .
+					' (#pages in stack: mt = ' . 
+					scalar(keys %{$self->{'rc_pages_midterm'}}) . ', st = ' . 
+					scalar(keys %{$self->{'rc_pages_shortterm'}}) . ') ' . 
 					$rc_msg->{'page_with_ns'} . ', editor = ' . $rc_msg->{'user'}
 				);
 				# check if page is on a maintenance list
 				my $text = undef;
 				while(my ($type, $pages) = each %{$self->{'rc_pages_maintenance'}}){
 					if(exists $pages->{$rc_msg->{'page_with_ns'}}){
-						$camelbot->update_maintenance_lists($rc_msg->{'page_with_ns'}, $text, $type, 
-							$self->{'rc_pages_maintenance'});
+						$camelbot->msg(2, "page '$rc_msg->{'page_with_ns'}' is on maintenance list '$type'.");
+						$camelbot->update_maintenance_lists($rc_msg->{'page_with_ns'}, $text, 
+							$type, $self->{'rc_pages_maintenance'});
 					}
 				}
 				$update{'ns0'} = 1;
@@ -2791,7 +2826,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 				#}
 				##print Dumper $rc_msg;
 				## update edit filter index
-				#if($rc_msg->{'ns_id'} == 4 and $rc_msg->{'page'} =~ /^$self->{'rc'}->{'re_edit_filter_name'}\//
+				#if($rc_msg->{'ns_id'} == 4 and $rc_msg->{'page'} =~ /^$self->{'rc'}->{'re_edit_filter_name'}\//){
 				#	$camelbot->update_edit_filter_index();
 				#}
 			}
@@ -3017,16 +3052,18 @@ if(defined $params->{'search-sbl-blocked-log-lang'}){
 	if($params->{'search-sbl-blocked-log-lang'} eq 'meta'){
 		my $sbl_meta = $camelbot->get_sbl_entries('meta');
 		$camelbot->msg(1, 'found '.scalar(@$sbl_meta).' entries in sbl.');
-		print "{|\n" . 
-			"! regexp || " . (join ' || ', sort @langs) . "\n";
+		print '{| class="wikitable sortable" style="table-layout:fixed; width:100%;"' . 
+			"\n" . '! style="width:300px;" | regexp || ' . 
+			(join ' || ', sort @langs) . "\n";
 		for my $regexp(@$sbl_meta[0..1]){
 			my %results = ();
 			for my $lang(@langs){
 				$results{$lang} = $camelbot->search_sbl_blocked_log($regexp, $lang);
 			}
-			print "| $regexp || " . 
+			print "|-\n| style=\"overflow:hidden;\" | $regexp || " . 
 				(join ' || ', (map {scalar(@{$results{$_}})} sort keys %results)) . "\n";
 		}
+		print "|}\n";
 	}else{
 		my %results = ();
 		for my $lang(@langs){
@@ -3413,4 +3450,3 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 originally written by seth (see https://github.com/wp-seth/camelbot)
 
 =cut
-
