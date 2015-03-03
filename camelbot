@@ -496,8 +496,13 @@ sub syntaxCheck{
 			qr/(?:(?:http:|(?<=\[))\/\/)+(https?):?\/\/($self->{'re_url_rear'})/m, 
 			'"$1:\/\/$2"');
 		# === missing brackets ===
-		$changes->{'missing bracket'} = $self->test_and_replace($text, 
+		# <ref>[http://www.example.org</ref>
+		$changes->{'missing right bracket'} = $self->test_and_replace($text, 
 			qr/(<ref>)\s*\[\s*(https?:\/\/$self->{'re_url_rear'})[\s.]*+(<\/ref>)/m, 
+			'"$1\x5b$2]$3"');
+		# <ref>http://www.example.org]</ref>
+		$changes->{'missing left bracket'} = $self->test_and_replace($text, 
+			qr/(<ref>)\s*(https?:\/\/$self->{'re_url_rear'})\s*+]\s*(<\/ref>)/m, 
 			'"$1\x5b$2]$3"');
 		# === specific domains ===
 		# see [https://de.wikipedia.org/w/index.php?title=MediaWiki_Diskussion:
