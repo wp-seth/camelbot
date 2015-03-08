@@ -4,14 +4,13 @@
 
 use strict;
 use warnings;
-use Data::Dumper;          # for debugging purposes
+use Carp;                     # better output on errors for debugging purposes
+use Data::Dumper;             # for debugging purposes
 use File::Path qw(make_path); # create directories
 use File::Slurp qw(slurp write_file); # read/write files
 use Getopt::Long qw(:config bundling); # cli params
-use Pod::Usage;            # cli params help
-
-# global vars
-$main::VERSION = '1.17.20150302';
+use Pod::Usage;               # cli params help
+use POSIX qw/strftime/;       # format timestamp
 
 # packages: CamelBot, CamelBotRC, CamelBotIRC
 #
@@ -218,18 +217,36 @@ $main::VERSION = '1.17.20150302';
 # sub write_csv
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
-## Carp::Always
-#sub _die {
-#  die @_ if ref($_[0]);
-#  if ($_[-1] =~ /\n$/s) {
-#    my $arg = pop @_;
-#    $arg =~ s/(.*)( at .*? line .*?\n$)/$1/s;
-#    push @_, $arg;
-#  }
-#  die &Carp::longmess;
-#}
-#
-#$SIG{__DIE__} = \&_die;
+# global vars
+$main::VERSION = '1.18.20150308';
+# avoid 'wide character' warning
+binmode STDOUT, ":encoding(UTF-8)";
+
+# Carp::Always
+sub _die {
+  die @_ if ref($_[0]);
+  if($_[-1] =~ /\n$/s){ # $_ is a read-only value
+    my $arg = pop @_;
+    $arg =~ s/.*\K at .*? line .*?\n$//s;
+    push @_, $arg;
+  }
+	unshift @_, strftime("%Y-%m-%d %H:%M:%S", gmtime()).' ';
+  die &Carp::longmess;
+}
+
+sub _warn {
+  die @_ if ref($_[0]);
+  if($_[-1] =~ /\n$/s){ # $_ is a read-only value
+    my $arg = pop @_;
+    $arg =~ s/.*\K at .*? line .*?\n$//s;
+    push @_, $arg;
+  }
+	unshift @_, strftime("%Y-%m-%d %H:%M:%S", gmtime()).' ';
+  warn &Carp::longmess;
+}
+
+$SIG{__DIE__} = \&_die;
+$SIG{__WARN__} = \&_warn;
 
 sub syntaxCheck{
 	my %params = ( # default cli params
@@ -259,7 +276,7 @@ sub syntaxCheck{
 		'verbose'            => 1,     # trace; grade of verbosity
 		'version'            => 0,     # diplay version and exit
 	);
-	pod2usage(-exitval=>2) if @ARGV==0;
+	pod2usage(-exitval => 2) if @ARGV == 0;
 	GetOptions(\%params,
 		'cat-add',
 		'cat-change|c',
@@ -294,8 +311,8 @@ sub syntaxCheck{
 		'help|?|h' => sub { Getopt::Long::HelpMessage(
 				-verbose  => 99,
 				-sections => 'NAME|SYNOPSIS|EXAMPLES');},
-		'man' => sub { pod2usage(-exitval=>0, -verbose=>2);},
-	) or pod2usage(-exitval=>2);
+		'man' => sub { pod2usage(-exitval => 0, -verbose => 2);},
+	) or pod2usage(-exitval => 2);
 	$params{'verbose'} = 1 unless exists $params{'verbose'};
 	my @additional_params = (0,0); # number of additional params (min, max);
 	if(@ARGV < $additional_params[0] or 
@@ -319,7 +336,6 @@ sub syntaxCheck{
 	package CamelBot;
 	use Data::Dumper;           # for debugging purposes
 	use DBI;                    # db connection
-	#use Carp;                   # better output on errors for debugging purposes
 	use File::Slurp qw(write_file); # read/write files
 	use IPC::Run;               # used for tidy
 	use LWP::UserAgent;         # fast, small web browser
@@ -490,54 +506,59 @@ sub syntaxCheck{
 		my $text     = shift; # ref to string
 		my $page     = shift;
 		my $changes = {};
-		# == link fixes ==
-		# === double protocol ===
-		$changes->{'double protocol'} = $self->test_and_replace($text, 
-			qr/(?:(?:http:|(?<=\[))\/\/)+(https?):?\/\/($self->{'re_url_rear'})/m, 
-			'"$1:\/\/$2"');
-		# === missing brackets ===
-		# <ref>[http://www.example.org</ref>
-		$changes->{'missing right bracket'} = $self->test_and_replace($text, 
-			qr/(<ref>)\s*\[\s*(https?:\/\/$self->{'re_url_rear'})[\s.]*+(<\/ref>)/m, 
-			'"$1\x5b$2]$3"');
-		# <ref>http://www.example.org]</ref>
-		$changes->{'missing left bracket'} = $self->test_and_replace($text, 
-			qr/(<ref>)\s*(https?:\/\/$self->{'re_url_rear'})\s*+]\s*(<\/ref>)/m, 
-			'"$1\x5b$2]$3"');
-		# === specific domains ===
-		# see [https://de.wikipedia.org/w/index.php?title=MediaWiki_Diskussion:
-		# Spam-blacklist&oldid=136131974#
-		# www.denkmalschutz.de_.22.26cHash.3D.5B0-9a-f.5D.2B.22_entfernen]
-		$changes->{'lf denkmalschutz.de'} = $self->test_and_replace($text, 
-			qr/http:\/\/www.denkmalschutz.de\/$self->{'re_url_class'}+?\K
-			&cHash=[0-9a-f]+/mx, 
-			'""',);
-		# == optional fixes==
-		if(scalar(grep {$_>0} values %$changes) > 0){
-			# === unicode character 0x200e before categories ===
-			$changes->{'u200e'} = $self->test_and_replace($text, 
-				qr/\x{200e}(?=\]\])/m, 
-				'""');
-			# === technically superfluous external links ===
-			if($page ne 'Hypertext Transfer Protocol Secure' and 
-				 $page ne 'Hypertext_Transfer_Protocol_Secure'){
-				$changes->{'lf pseudo-external links'} = $self->test_and_replace($text, 
-					qr/(?<!<ref>)\[{1,2}
-						(https?:\/\/de\.wikipedia\.org\/wiki\/[^\]|\x20\x23?]++
-						(?:\x23(?!mediaviewer)[^\]|\x20?]+)?)\s
-						([^\]]+)
-					\]{1,2}/mx, 
-					'"[[".$self->url2title($1).($self->url2title($1) eq $2 ? "" : "|$2")."]]"');
+		if(defined $text and ref $text eq 'SCALAR' and defined $$text){
+			# == link fixes ==
+			# === double protocol ===
+			$changes->{'double protocol'} = $self->test_and_replace($text, 
+				qr/(?:(?:http:|(?<=\[))\/\/)+(https?):?\/\/($self->{'re_url_rear'})/m, 
+				'"$1:\/\/$2"');
+			# === missing brackets ===
+			# <ref>[http://www.example.org</ref>
+			$changes->{'missing right bracket'} = $self->test_and_replace($text, 
+				qr/(<ref>)\s*\[\s*(https?:\/\/$self->{'re_url_rear'})[\s.]*+(<\/ref>)/m, 
+				'"$1\x5b$2]$3"');
+			# <ref>http://www.example.org]</ref>
+			$changes->{'missing left bracket'} = $self->test_and_replace($text, 
+				qr/(<ref>)\s*(https?:\/\/$self->{'re_url_rear'})\s*+]\s*(<\/ref>)/m, 
+				'"$1\x5b$2]$3"');
+			# === specific domains ===
+			# see [https://de.wikipedia.org/w/index.php?title=MediaWiki_Diskussion:
+			# Spam-blacklist&oldid=136131974#
+			# www.denkmalschutz.de_.22.26cHash.3D.5B0-9a-f.5D.2B.22_entfernen]
+			$changes->{'lf denkmalschutz.de'} = $self->test_and_replace($text, 
+				qr/http:\/\/www.denkmalschutz.de\/$self->{'re_url_class'}+?\K
+				&cHash=[0-9a-f]+/mx, 
+				'""',);
+			# == optional fixes==
+			if(scalar(grep {$_>0} values %$changes) > 0){
+				# === unicode character 0x200e before categories ===
+				$changes->{'u200e'} = $self->test_and_replace($text, 
+					qr/\x{200e}(?=\]\])/m, 
+					'""');
+				# === technically superfluous external links ===
+				if($page ne 'Hypertext Transfer Protocol Secure' and 
+					 $page ne 'Hypertext_Transfer_Protocol_Secure'){
+					$changes->{'lf pseudo-external links'} = $self->test_and_replace($text, 
+						qr/(?<!<ref>)\[{1,2}
+							(https?:\/\/de\.wikipedia\.org\/wiki\/[^\]|\x20\x23?]++
+							(?:\x23(?!mediaviewer)[^\]|\x20?]+)?)\s
+							([^\]]+)
+						\]{1,2}/mx, 
+						'"[[".$self->url2title($1).($self->url2title($1) eq $2 ? "" : "|$2")."]]"');
+				}
+				# === redundant internal link description ===
+				$changes->{'redundant link description'} = $self->test_and_replace($text, 
+					qr/\[\[\s*+([^|\]\[]+\S)\s*\|\s*+\1\s*+\]\]/m, 
+					'"[[$1]]"');
 			}
-			# === redundant internal link description ===
-			$changes->{'redundant link description'} = $self->test_and_replace($text, 
-				qr/\[\[\s*+([^|\]\[]+\S)\s*\|\s*+\1\s*+\]\]/m, 
-				'"[[$1]]"');
+			# === tests ===
+			#$self->test_and_replace($text, 
+			#		qr/seth sagt: hallo camelbot!/m, 
+			#		'"camelbot sagt: hallo seth!"');
+		}else{
+			$self->msg(0, '$$text is not defined', 'warning');
+			return $changes;
 		}
-		# === tests ===
-		#$self->test_and_replace($text, 
-		#		qr/seth sagt: hallo camelbot!/m, 
-		#		'"camelbot sagt: hallo seth!"');
 		return $changes;
 	}
 
@@ -755,7 +776,7 @@ sub syntaxCheck{
 				chomp($user_input = <STDIN>);
 			}
 			if((not defined $self->{'ask_user'}) or !$self->{'ask_user'} 
-					or $user_input=~/y(?:es)?/ 
+					or $user_input =~ /y(?:es)?/ 
 					or ($user_input eq '' and $self->{'user_answer'} eq 'y')){
 				$self->{'user_answer'} = 'y';
 				$self->msg(1, "  deleting page [[$page]] ...");
@@ -1195,8 +1216,8 @@ sub syntaxCheck{
 								'oldid' => 'prev',
 							});
 							# my $found = 0;
-							while($diff=~/<td class=\"diff-deletedline\">(.*?)<\/td>/g){
-								if($1=~/($re_url*)/){
+							while($diff =~ /<td class=\"diff-deletedline\">(.*?)<\/td>/g){
+								if($1 =~ /($re_url*)/){
 									push @links, {
 										'title' => $_->{'title'},
 										'url' => $1,
@@ -1224,7 +1245,7 @@ sub syntaxCheck{
 						and $options{'max_edits'} != -1){
 					last;
 				}
-				#next unless $hash->{'url'}=~/$re_prot_part$re_url_part/;
+				#next unless $hash->{'url'} =~ /$re_prot_part$re_url_part/;
 				$self->msg(1, "$edit_counter: page= $page, url= ".$hash->{'url'});
 				my $text = $self->{'mw_bot'}->get_text($page);
 				next unless $self->is_allowed(\$text, $page);
@@ -1258,7 +1279,7 @@ sub syntaxCheck{
 							}
 						}else{
 							# backrefs
-							if($text=~/$re_ref_tag_name$re_ref_inner_part/){
+							if($text =~ /$re_ref_tag_name$re_ref_inner_part/){
 								my $ref_name = $1;
 								$self->msg(1, $ref_name, 'debug');
 								$self->test_and_replace(
@@ -1318,7 +1339,7 @@ sub syntaxCheck{
 								|Normdaten|(?:Vorlage:)?Orden,|SORTIERUNG)
 							|(?:<!--\x20?)?==)/mx;
 					$self->test_and_replace(\$text, $weblinks_heading_re, '"$2"');
-					if($text=~/(.*(?<!\|url=$re_prot_part)$re_url_part.*)/){
+					if($text =~ /(.*(?<!\|url=$re_prot_part)$re_url_part.*)/){
 						$self->msg(1, " not resolved: $1");
 					}
 				}
@@ -1330,7 +1351,7 @@ sub syntaxCheck{
 
 		if($options{'nonarticles'}){
 			my $namespaces = {$self->{'mw_bot'}->get_namespace_names()}; # get namespaces
-			$namespaces = [grep {$_!=0} keys %$namespaces]; # delete namespace 0 from list
+			$namespaces = [grep {$_ != 0} keys %$namespaces]; # delete namespace 0 from list
 			$self->msg(1, "starting linksearch in ns!=0...");
 			my @links;
 			if(defined $options{'searched_link'}){
@@ -1387,13 +1408,13 @@ sub syntaxCheck{
 	#					$self->test_and_replace(\$text, qr/([|{]\s*)$re_prot_part($re_url_part$self->{'re_url_class'}*)(\s*[|}])/, '$1.$2.$3');
 					}
 					# not good for large pages:
-					if($text=~/^(.*(?<!<nowiki>)(?<!<nowiki>\[)$re_prot_part$re_url_part.*)/m){
+					if($text =~ /^(.*(?<!<nowiki>)(?<!<nowiki>\[)$re_prot_part$re_url_part.*)/m){
 						$self->msg(1, " not resolved: $1");
 					}
 					# better:
-	#				while($text=~/(^.*$re_prot_part$re_url_part.*)/gmo){
+	#				while($text =~ /(^.*$re_prot_part$re_url_part.*)/gmo){
 	#					my $temp = $1;
-	#					if($temp=~/(?<!<nowiki>)(?<!<nowiki>\[)$re_prot_part$re_url_part/){
+	#					if($temp =~ /(?<!<nowiki>)(?<!<nowiki>\[)$re_prot_part$re_url_part/){
 	#						$self->msg(1, " not resolved: $temp");
 	#					}
 	#				}
@@ -1467,7 +1488,7 @@ sub syntaxCheck{
 				$wiki_password = ReadLine(0);
 				chomp($wiki_password);
 				ReadMode 'restore';
-				while($wiki_password=~/\x{007f}/){
+				while($wiki_password =~ /\x{007f}/){
 					$wiki_password =~ s/(?:^|[^\x{007f}])\x{007f}//g;
 				}
 			}
@@ -1551,11 +1572,11 @@ sub syntaxCheck{
 			'author' => '',
 		};
 		for my $t(@$threads){
-			next unless $t=~/^(=++)\s*(.*?)\s*\1/;
+			next unless $t =~ /^(=++)\s*(.*?)\s*\1/;
 			my $thread_title = $2;
 			$newest_thread->{'thread'} = $thread_title unless defined $newest_thread->{'thread'};
 			my $date;
-			while($t=~/(?<pre_sig>.*)(?<hour>\d\d):(?<min>\d\d),\x20
+			while($t =~ /(?<pre_sig>.*)(?<hour>\d\d):(?<min>\d\d),\x20
 				(?<mday>[1-9]|[123][0-9])\.\x20(?<mon>[a-zA-Zä\xe4]{3,4})\.?\x20
 				(?<year>20\d\d)\x20\((?<tz>CES?T)\)/gx){
 				my $month = 
@@ -1682,7 +1703,7 @@ sub syntaxCheck{
 		my $self = shift;
 		my $msg = shift;
 		my %parsed_msg;
-		if($msg=~/^\cC14
+		if($msg =~ /^\cC14
 			\[\[\cC07([^\]]+)\cC14]]\cC4\x20   # page
 			([a-z0-9_-]+|[!NMB]*)\cC10\x20     # flags
 			\cC02([^\cC]*)\cC\x20\cC5\*\cC\x20 # url
@@ -2283,7 +2304,7 @@ sub syntaxCheck{
 				"[[special:contributions/$npost->{'author'}|$npost->{'author'}]]";
 			last if $page->{'revisions'}->[0]->{'timestamp'} lt 
 				strftime("%Y-%m-%d", gmtime(time-60*60*24*$max_num_days_age)) 
-				and $i>=$max_num_talk_pages;
+				and $i >= $max_num_talk_pages;
 		}
 		#print table2wikitext($tables->[0], {'table' => 'class="wikitable sortable"'}, 1);
 		if(keys %new_topics > 0){
@@ -2854,7 +2875,7 @@ my $camelbot = CamelBot->new({
 });
 
 # used for debugging only:
-#my $text = $camelbot->{'mw_bot'}->get_text('...');
+#my $text = $camelbot->{'mw_bot'}->get_text("T\xe4cks");
 #my $changes = $camelbot->cleanup_wiki_page(\$text, 'moep');
 #print Dumper $changes;
 #exit 1;
@@ -3059,14 +3080,28 @@ if(defined $params->{'search-sbl-blocked-log-lang'}){
 		$camelbot->msg(1, 'found '.scalar(@$sbl_meta).' entries in sbl.');
 		print '{| class="wikitable sortable" style="table-layout:fixed; width:100%;"' . 
 			"\n" . '! style="width:300px;" | regexp || ' . 
-			(join ' || ', sort @langs) . "\n";
-		for my $regexp(@$sbl_meta[0..1]){
+			(join ' || ', sort @langs) . ' || sum' . "\n";
+		for my $regexp(@$sbl_meta){
 			my %results = ();
+			my $sum = 0;
 			for my $lang(@langs){
 				$results{$lang} = $camelbot->search_sbl_blocked_log($regexp, $lang);
+				$sum += $results{$lang};
 			}
 			print "|-\n| style=\"overflow:hidden;\" | $regexp || " . 
-				(join ' || ', (map {scalar(@{$results{$_}})} sort keys %results)) . "\n";
+				(join ' || ', (map {scalar(@{$results{$_}})} sort keys %results));
+			print ' || ' . $sum . "\n";
+		}
+		print "|}\n";
+	}elsif($params->{'search-sbl-blocked-log-lang'} eq 'de'){
+		my $lang = $params->{'search-sbl-blocked-log-lang'};
+		my $sbl = $camelbot->get_sbl_entries();
+		$camelbot->msg(1, 'found '.scalar(@$sbl).' entries in sbl.');
+		print '{| class="wikitable sortable" style="table-layout:fixed; width:100%;"' . 
+			"\n" . '! style="width:400px;" | regexp || ' . "$lang\n";
+		for my $regexp(@$sbl){
+			my $num_hits = $camelbot->search_sbl_blocked_log($regexp, $lang);
+			print "|-\n| style=\"overflow:hidden;\" | $regexp || $num_hits\n";
 		}
 		print "|}\n";
 	}else{
