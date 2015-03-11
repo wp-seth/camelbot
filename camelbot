@@ -152,6 +152,9 @@ use POSIX qw/strftime/;       # format timestamp
 # sub search_sbl_blocked_log
 # 	search the list of blocked edits (blocked by sbl) for a given url-regexp
 #
+# sub search_sbl_attempts
+# 	search list(s) of blocked edits (blocked by sbl)
+#
 # sub table2wikitext
 # 	converts a special table hash ref to wikitext
 #
@@ -218,7 +221,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.18.20150308';
+$main::VERSION = '1.19.20150311';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -230,7 +233,7 @@ sub _die {
     $arg =~ s/.*\K at .*? line .*?\n$//s;
     push @_, $arg;
   }
-	unshift @_, strftime("%Y-%m-%d %H:%M:%S", gmtime()).' ';
+	unshift @_, strftime("%Y-%m-%d %H:%M:%S ", gmtime());
   die &Carp::longmess;
 }
 
@@ -241,7 +244,7 @@ sub _warn {
     $arg =~ s/.*\K at .*? line .*?\n$//s;
     push @_, $arg;
   }
-	unshift @_, strftime("%Y-%m-%d %H:%M:%S", gmtime()).' ';
+	unshift @_, strftime("%Y-%m-%d %H:%M:%S ", gmtime());
   warn &Carp::longmess;
 }
 
@@ -260,8 +263,7 @@ sub syntaxCheck{
 		'parse'              => undef, # wikitext-file to parse
 		'rc-monitoring'      => undef, # start rc monitoring via irc or db
 		'save-as-html'       => undef, # download pages and save as html pages
-		'search-sbl-blocked-log' => undef, # search the sbl log of blocked edits
-		'search-sbl-blocked-log-lang' => undef, # search the sbl logs of several wikis of blocked edits
+		'search-sbl-attempts' => undef, # search the sbl log of blocked edits
 		'section'            => undef, # section in wikipage
 		'text-replacement'   => 0,     # text replacing
 		'udest'              => undef, # destination filename
@@ -289,8 +291,7 @@ sub syntaxCheck{
 		'parse=s',
 		'rc-monitoring=s',
 		'save-as-html=s',
-		'search-sbl-blocked-log=s',
-		'search-sbl-blocked-log-lang=s',
+		'search-sbl-attempts=s',
 		'section=s',
 		'text-replacement',
 		'udest=s',
@@ -381,6 +382,9 @@ sub syntaxCheck{
 			# user answer initially is "no"
 			'user_answer'    => $params->{'user_answer'} // '', 
 			'verbosity'      => $params->{'verbosity'} // 1,
+			'wm_proj_type'   => undef, # e.g. wikipedia
+			'wm_proj'        => undef, # e.g. dewiki
+			'wm_lang'        => undef, # e.g. de
 			'cliparams'      => $params->{'cliparams'},
 		}, $class;
 		$self->login($params->{'mw_password'}); # may change mw_username!
@@ -540,11 +544,13 @@ sub syntaxCheck{
 					 $page ne 'Hypertext_Transfer_Protocol_Secure'){
 					$changes->{'lf pseudo-external links'} = $self->test_and_replace($text, 
 						qr/(?<!<ref>)\[{1,2}
-							(https?:\/\/de\.wikipedia\.org\/wiki\/[^\]|\x20\x23?]++
-							(?:\x23(?!mediaviewer)[^\]|\x20?]+)?)\s
+							(https?:\/\/$self->{'wm_lang'}\.$self->{'wm_project'}\.org\/wiki\/
+								[^\]|\x20\x23?]++
+								(?:\x23(?!mediaviewer)[^\]|\x20?]+)?)\s
 							([^\]]+)
 						\]{1,2}/mx, 
-						'"[[".$self->url2title($1).($self->url2title($1) eq $2 ? "" : "|$2")."]]"');
+						'"[[".$self->url2title($1).($self->url2title($1) eq $2 ? "" : "|$2")."]]"'
+					);
 				}
 				# === redundant internal link description ===
 				$changes->{'redundant link description'} = $self->test_and_replace($text, 
@@ -593,11 +599,14 @@ sub syntaxCheck{
 	sub _db_init{
 		my $self    = shift;
 		my $db_file = shift // $ENV{'HOME'}.'/replica.my.cnf';
-		my $lang    = shift // 'de';
+		my $proj    = shift // $self->{'wm_proj'};
+		unless(defined $proj){
+			$self->msg(0, '$proj is not defined', 'error');
+		}
 		# db connection parameters
 		my $db = {
-			'host' => $lang.'wiki.labsdb',
-			'name' => $lang.'wiki_p',
+			'host' => $proj.'.labsdb',
+			'name' => $proj.'_p',
 		};
 		my $opened = open(my $INFILE, '<', $db_file);
 		unless($opened){
@@ -641,9 +650,13 @@ sub syntaxCheck{
 		my $self          = shift;
 		my $db_query      = shift;
 		my $return_header = shift // 1;
-		my $lang          = shift // 'de';
-		$self->msg(3, "lang = $lang");
-		my $dbh = $self->_db_init(undef, $lang) or return undef;
+		my $proj          = shift // $self->{'wm_proj'};
+		if(defined $proj){
+			$self->msg(3, "proj = $proj");
+		}else{
+			$self->msg(0, '$proj is not defined.', 'error');
+		}
+		my $dbh = $self->_db_init(undef, $proj) or return undef;
 		#print Dumper $db_query;
 		if(ref(\$db_query) ne 'SCALAR'){
 			#$db_query->[0] =~ s/\s+/ /g;
@@ -719,8 +732,8 @@ sub syntaxCheck{
 	}
 
 	sub db_fetch_sbl_log{
-		my $self = shift;
-		my $lang = shift // 'de';
+		my $self   = shift;
+		my $proj   = shift // $self->{'wm_proj'};
 		my $url_re = shift // '.';
 		# mariadb does not know perl's /(?^)/ pattern
 		$url_re =~ s/\(\?\K\^//g;
@@ -741,7 +754,7 @@ sub syntaxCheck{
 				WHERE `log_type` = \'spamblacklist\'
 					AND log_params regexp %s
 				ORDER BY `log_timestamp`
-		', $url_re], !$return_header, $lang);
+		', $url_re], !$return_header, $proj);
 		return $db_table;
 	}
 
@@ -1502,6 +1515,15 @@ sub syntaxCheck{
 			#'path'     => 'mediawiki',
 		);
 		$self->msg(2, "logging in at $address_params{'host'}...");
+		if($address_params{'host'} =~ /^([a-z]+)\.(
+				wikibooks|wikidata|wikimedia|wikinews|wikipedia|wikiquote|
+				wikisource|wikiversity|wikivoyage|wiktionary
+			)\.org\z/x){
+			$self->{'wm_proj_type'} = $1;
+			$self->{'wm_lang'} = $2;
+			$self->{'wm_proj'} = $self->{'wm_lang'} . $self->{'wm_proj_type'};
+			$self->{'wm_proj'} =~ s/wiki[pm]edia\z/wiki/;
+		}
 		$self->{'mw_bot'} = MediaWiki::Bot->new({
 			assert      => 'bot',
 			#do_sul      => ($address_params{'host'} =~ /\.wikipedia\.org$/ ? 1 : 0),
@@ -1522,8 +1544,7 @@ sub syntaxCheck{
 		if(    $self->{'cliparams'}->{'delete'} 
 				or $self->{'cliparams'}->{'upload'} 
 				or $self->{'cliparams'}->{'link-replacement'}
-				or $self->{'cliparams'}->{'search-sbl-blocked-log'}
-				or $self->{'cliparams'}->{'search-sbl-blocked-log-lang'}
+				or $self->{'cliparams'}->{'search-sbl-attempts'}
 		){
 			$self->{'mw_api'}->{'config'}->{'api_url'} = $self->{'mw_apiurl'};
 			$self->{'mw_api'}->{'config'}->{'upload_url'} = $wiki_base_url.'/wiki/Special:Upload';
@@ -1994,9 +2015,9 @@ sub syntaxCheck{
 	sub search_sbl_blocked_log{
 		my $self   = shift;
 		my $regexp = shift;
-		my $lang   = shift // 'de';
+		my $proj   = shift // $self->{'wm_proj'};
 		my @results = ();
-		my $db_table = $self->db_fetch_sbl_log($lang, $regexp);
+		my $db_table = $self->db_fetch_sbl_log($proj, $regexp);
 		if(defined $db_table){
 			for my $dataset(@$db_table){
 				push @results, {
@@ -2010,7 +2031,7 @@ sub syntaxCheck{
 				$results[-1]->{'url'} =~ s/^.*?"(http[^"]*)".*$/$1/;
 			}
 			$self->msg(2, 'found '.scalar(@results).' matching blocked edits.');
-		}elsif($lang eq 'de'){ # use api
+		}elsif(not defined $proj or $proj eq $self->{'wm_proj'}){ # use api
 			# api.php?action=query&list=logevents&letype=spamblacklist&leprop=ids|title|type|user|timestamp|comment|details&continue=
 			my $query = {
 				'action'         => 'query',
@@ -2051,9 +2072,112 @@ sub syntaxCheck{
 			} @results;
 			$self->msg(1, "log contains $log_counter entries. found $num_results matching blocked edits.");
 		}else{
-			$self->msg(0, "not defined for lang = '$lang'", 'error');
+			$self->msg(0, "not defined for proj = '$proj'", 'error');
 		}
 		return \@results;
+	}
+
+	sub search_sbl_attempts{
+		my $self   = shift;
+		my $params = shift;
+		unless(exists $params->{'proj'}){
+			$params->{'proj'} = $self->{'wm_proj'};
+		}
+		unless(exists $params->{'sbl'}){
+			$params->{'sbl'} = $self->{'wm_proj'};
+		}
+		my @large_projects = qw(ca ceb de en es fr it ja nl no pl pt ru sv uk vi war zh);
+		map {$_ .= 'wiki'} @large_projects;
+		# search for given regexp
+		if(exists $params->{'regexp'}){
+			# search current project for given regexp
+			if($params->{'proj'} eq $self->{'wm_proj'}){
+				my $blocked_edits = $self->search_sbl_blocked_log(qr/$params->{'regexp'}/);
+				for my $edit(@$blocked_edits){
+					print "$edit->{'timestamp'}, $edit->{'url'}, $edit->{'user'}; " . 
+						$edit->{'title'} . "\n";
+				}
+			}elsif($params->{'proj'} eq 'large'){
+				# search large wikipedias for a given regexp; return all single spam 
+				# attempts
+				my %results = ();
+				for my $proj(@large_projects){
+					$results{$proj} = $self->search_sbl_blocked_log(
+						qr/$params->{'regexp'}/, $proj);
+				}
+				while(my ($proj, $blocked_edits) = each %results){
+					$self->msg(1, "$proj: ".scalar(@$blocked_edits));
+					for my $edit(@$blocked_edits){
+						print "$edit->{'timestamp'}, $edit->{'url'}, $edit->{'user'}; " . 
+							$edit->{'title'} . "\n";
+					}
+				}
+			}else{
+				$self->msg(0, 'not implemented yet', 'error');
+			}
+		}else{
+			# search large wikipedias for all entries of meta sbl
+			if($params->{'sbl'} =~ /^meta(?:wiki)?\z/){
+				if($params->{'proj'} eq 'large'){
+					my $sbl_meta = $self->get_sbl_entries('meta');
+					$self->msg(1, 'found ' . scalar(@$sbl_meta) . ' entries in sbl.');
+					print '{| class="wikitable sortable" style="table-layout:fixed; width:100%;"' . 
+						"\n" . '! style="width:300px;" | regexp || ' . 
+						(join ' || ', sort @large_projects) . ' || sum' . "\n";
+					for my $regexp(@$sbl_meta){
+						my %results = ();
+						my $sum = 0;
+						for my $proj(@large_projects){
+							$results{$proj} = $self->search_sbl_blocked_log($regexp, $proj);
+							$sum += $results{$proj};
+						}
+						print "|-\n| style=\"overflow:hidden;\" | $regexp || " . 
+							(join ' || ', (map {scalar(@{$results{$_}})} sort keys %results));
+						print ' || ' . $sum . "\n";
+					}
+					print "|}\n"; # }
+				}elsif($params->{'proj'} eq 'all'){
+					# todo:
+					my ($http_status, $projects) = $self->get_http_content(
+						'https://noc.wikimedia.org/conf/all.dblist');
+					$projects = [split /\n/, $projects];
+					my $sbl_meta = $self->get_sbl_entries('meta');
+					$self->msg(1, 'found ' . scalar(@$sbl_meta) . ' entries in sbl.');
+					print '{| class="wikitable sortable" style="table-layout:fixed; width:100%;"' . 
+						"\n" . '! style="width:300px;" | regexp || ' . 
+						(join ' || ', sort @$projects) . ' || sum' . "\n";
+					for my $regexp(@$sbl_meta){
+						my %results = ();
+						my $sum = 0;
+						for my $proj(@$projects){
+							$results{$proj} = $self->search_sbl_blocked_log($regexp, $proj);
+							$sum += $results{$proj};
+						}
+					#	print "|-\n| style=\"overflow:hidden;\" | $regexp || " . 
+					#		(join ' || ', (map {scalar(@{$results{$_}})} sort keys %results));
+					#	print ' || ' . $sum . "\n";
+					}
+					print "|}\n"; # }
+				}else{
+					$self->msg(0, 'not implemented yet', 'error');
+				}
+			}elsif($params->{'sbl'} eq $self->{'wm_proj'} 
+					and $params->{'proj'} eq $self->{'wm_proj'}){
+				# search current mediawiki for all entries of its sbl
+				my $proj = $self->{'wm_proj'};
+				my $sbl = $self->get_sbl_entries();
+				$self->msg(1, 'found '.scalar(@$sbl).' entries in sbl.');
+				print '{| class="wikitable sortable" style="table-layout:fixed; width:100%;"' . 
+					"\n" . '! style="width:400px;" | regexp || ' . "$proj\n";
+				for my $regexp(@$sbl){
+					my $num_hits = $self->search_sbl_blocked_log($regexp, $proj);
+					print "|-\n| style=\"overflow:hidden;\" | $regexp || $num_hits\n";
+				}
+				print "|}\n"; # }
+			}else{
+				$self->msg(0, 'not implemented yet', 'error');
+			}
+		}
 	}
 
 	sub table2wikitext{
@@ -2486,7 +2610,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 	sub url2title{
 		my $self   = shift;
 		my $url    = shift;
-		$url =~ /^(?:https?:\/\/de\.wikipedia\.org\/wiki\/)?(.*)/;
+		$url =~ /^(?:https?:\/\/$self->{'wm_lang'}\.$self->{'wm_proj_type'}\.org\/wiki\/)?(.*)/;
 		my $article_name = uri_unescape($1);
 		$article_name =~s/_/ /g;
 		# 2014-12-23, seth: "https://de.wikipedia.org/wiki/K%C3%B6nigliche_und_barmherzige_Vereinigung_der_Ordens-_und_Medaillentr%C3%A4ger_von_Belgien" became: "KÃ¶nigliche und barmherzige Vereinigung der Ordens- und MedaillentrÃ¤ger von Belgien"
@@ -3064,58 +3188,17 @@ if(defined $params->{'save-as-html'}){
 	write_file($htmlfilename, {binmode => ':utf8'}, $html_cleaned);
 }
 
-if(defined $params->{'search-sbl-blocked-log'}){
-	my $blocked_edits = $camelbot->search_sbl_blocked_log(
-		qr/$params->{'search-sbl-blocked-log'}/);
-	for my $edit(@$blocked_edits){
-		print "$edit->{'timestamp'}, $edit->{'url'}, $edit->{'user'}; $edit->{'title'}\n";
-	}
-}
-
-if(defined $params->{'search-sbl-blocked-log-lang'}){
-	my @langs = qw(ca ceb de en es fr it ja nl no pl pt ru sv uk vi war zh);
-	my @to_check;
-	if($params->{'search-sbl-blocked-log-lang'} eq 'meta'){
-		my $sbl_meta = $camelbot->get_sbl_entries('meta');
-		$camelbot->msg(1, 'found '.scalar(@$sbl_meta).' entries in sbl.');
-		print '{| class="wikitable sortable" style="table-layout:fixed; width:100%;"' . 
-			"\n" . '! style="width:300px;" | regexp || ' . 
-			(join ' || ', sort @langs) . ' || sum' . "\n";
-		for my $regexp(@$sbl_meta){
-			my %results = ();
-			my $sum = 0;
-			for my $lang(@langs){
-				$results{$lang} = $camelbot->search_sbl_blocked_log($regexp, $lang);
-				$sum += $results{$lang};
-			}
-			print "|-\n| style=\"overflow:hidden;\" | $regexp || " . 
-				(join ' || ', (map {scalar(@{$results{$_}})} sort keys %results));
-			print ' || ' . $sum . "\n";
-		}
-		print "|}\n";
-	}elsif($params->{'search-sbl-blocked-log-lang'} eq 'de'){
-		my $lang = $params->{'search-sbl-blocked-log-lang'};
-		my $sbl = $camelbot->get_sbl_entries();
-		$camelbot->msg(1, 'found '.scalar(@$sbl).' entries in sbl.');
-		print '{| class="wikitable sortable" style="table-layout:fixed; width:100%;"' . 
-			"\n" . '! style="width:400px;" | regexp || ' . "$lang\n";
-		for my $regexp(@$sbl){
-			my $num_hits = $camelbot->search_sbl_blocked_log($regexp, $lang);
-			print "|-\n| style=\"overflow:hidden;\" | $regexp || $num_hits\n";
-		}
-		print "|}\n";
+if(defined $params->{'search-sbl-blocked-attempts'}){
+	if($params->{'search-sbl-blocked-attempts'} =~ /^(?:[a-z]+=[^;]*;){1,2}[a-z]+=[^;]*;?$/){
+		my @param_parts = split /;/, $params->{'search-sbl-blocked-attempts'};
+		my $subparams;
+		map {
+			/^([a-z]+)\s*=\s*+([^;]*)/; 
+			$subparams->{$1} = $2;
+		} @param_parts;
+		$camelbot->search_sbl_attempts($subparams);
 	}else{
-		my %results = ();
-		for my $lang(@langs){
-			$results{$lang} = $camelbot->search_sbl_blocked_log(
-				qr/$params->{'search-sbl-blocked-log-lang'}/, $lang);
-		}
-		while(my ($lang, $blocked_edits) = each %results){
-			$camelbot->msg(1, "$lang: ".scalar(@$blocked_edits));
-			for my $edit(@$blocked_edits){
-				print "$edit->{'timestamp'}, $edit->{'url'}, $edit->{'user'}; $edit->{'title'}\n";
-			}
-		}
+		$camelbot->msg(0, "could not read param '$params->{'search-sbl-blocked-attempts'}'", 'error');
 	}
 }
 
@@ -3289,10 +3372,14 @@ mediawiki/wikipedia options:
                                 irc - an irc bot
                                 db  - an db connection
      --save_as_html=s          saves a given wiki page as local html-file
-     --search-sbl-blocked-log=s search the list of blocked edits (blocked by sbl) 
-                                  for a given url-regexp
-     --search-sbl-blocked-log-lang=s search the list of blocked edits (blocked by sbl)
-                                  for a given url-regexp. search in several wikis.
+     --search-sbl-attempts=s   search the list of blocked edits (blocked by sbl) 
+                                for a given url-regexp or for a complete given sbl.
+                                this may search in several wikis.
+                                param is of format 
+                                  'regexp=...;proj=...;sbl=...;'
+                                e.g. 'regexp=evil-?domain\.;proj=enwiki;' or
+                                e.g. 'proj=enwiki;sbl=meta;'
+                                (syntax may change in future)
  -t, --test                    don't change anything, just print possible changes
      --update-editfilter-index update edit filter index (at w:de)
      --upload                  upload a file
@@ -3378,14 +3465,26 @@ or a db (I<type>==db) connection to a "real time" db.
 parses wikitext of given page and saves result to file with same name but with 
 extension .html.
 
-=item B<--search-sbl-blocked-log>=I<regexp>
+=item B<--search-sbl-attempts>=I<string>
 
-search the log of edits blocked by sbl for a given url-regexp I<regexp>
+search the log of edits blocked by sbl for a given url-regexp I<string> or all 
+entries of a given spam-blacklist (sbl). may search several wikis.
 
-=item B<--search-sbl-blocked-log-lang>=I<regexp>
+I<string> contains at least one of the following parameters
 
-search the log of edits blocked by sbl for a given url-regexp I<regexp>. search
-several wikis.
+'regexp=...;proj=...;sbl=...;'
+
+e.g.
+
+'regexp=some-?evil-?domain;proj=de.wikipedia;'
+
+'sbl=meta;proj=dewiki;'
+
+'sbl=dewiki;proj=dewiki;'
+
+'sbl=meta;proj=all;'
+
+see <https://noc.wikimedia.org/conf/all.dblist> for a complete list of projects
 
 =item B<--test>, B<-t>
 
