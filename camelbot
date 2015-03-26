@@ -221,31 +221,30 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.19.20150311';
+$main::VERSION = '1.20.20150323';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
 # Carp::Always
 sub _die {
-  die @_ if ref($_[0]);
-  if($_[-1] =~ /\n$/s){ # $_ is a read-only value
-    my $arg = pop @_;
-    $arg =~ s/.*\K at .*? line .*?\n$//s;
-    push @_, $arg;
-  }
+	die @_ if ref($_[0]);
+	if($_[-1] =~ /\n$/s){ # $_ is a read-only value
+		my $arg = pop @_;
+		$arg =~ s/.*\K at .*? line .*?\n$//s;
+		push @_, $arg;
+	}
 	unshift @_, strftime("%Y-%m-%d %H:%M:%S ", gmtime());
-  die &Carp::longmess;
+	die &Carp::longmess;
 }
 
 sub _warn {
-  die @_ if ref($_[0]);
-  if($_[-1] =~ /\n$/s){ # $_ is a read-only value
-    my $arg = pop @_;
-    $arg =~ s/.*\K at .*? line .*?\n$//s;
-    push @_, $arg;
-  }
+	if($_[-1] =~ /\n$/s){ # $_ is a read-only value
+		my $arg = pop @_;
+		$arg =~ s/.*\K at .*? line .*?\n$//s;
+		push @_, $arg;
+	}
 	unshift @_, strftime("%Y-%m-%d %H:%M:%S ", gmtime());
-  warn &Carp::longmess;
+	warn &Carp::longmess;
 }
 
 $SIG{__DIE__} = \&_die;
@@ -544,7 +543,7 @@ sub syntaxCheck{
 					 $page ne 'Hypertext_Transfer_Protocol_Secure'){
 					$changes->{'lf pseudo-external links'} = $self->test_and_replace($text, 
 						qr/(?<!<ref>)\[{1,2}
-							(https?:\/\/$self->{'wm_lang'}\.$self->{'wm_project'}\.org\/wiki\/
+							(https?:\/\/$self->{'wm_lang'}\.$self->{'wm_proj_type'}\.org\/wiki\/
 								[^\]|\x20\x23?]++
 								(?:\x23(?!mediaviewer)[^\]|\x20?]+)?)\s
 							([^\]]+)
@@ -1519,8 +1518,8 @@ sub syntaxCheck{
 				wikibooks|wikidata|wikimedia|wikinews|wikipedia|wikiquote|
 				wikisource|wikiversity|wikivoyage|wiktionary
 			)\.org\z/x){
-			$self->{'wm_proj_type'} = $1;
-			$self->{'wm_lang'} = $2;
+			$self->{'wm_lang'} = $1;
+			$self->{'wm_proj_type'} = $2;
 			$self->{'wm_proj'} = $self->{'wm_lang'} . $self->{'wm_proj_type'};
 			$self->{'wm_proj'} =~ s/wiki[pm]edia\z/wiki/;
 		}
@@ -2746,72 +2745,96 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		my $now    = time;
 		my $camelbot = $self->{'camelbot'};
 		# delayed clean up:
-		my @updList_midterm;
-		my @updList_shortterm;
 		my $max_pages_per_call = 200;
-		# after delay transfer pages from $rc_pages_shortterm to @updList_shortterm
-		while(my ($title, $timestamp_unix) = each %{$self->{'rc_pages_shortterm'}}){
-			if($timestamp_unix + $self->{'delay_short'} < $now){
-				delete $self->{'rc_pages_shortterm'}->{$title};
-				$camelbot->msg(2, ' short term update of page: '. $title);
-				push @updList_shortterm, $title;
-				last if @updList_shortterm >= $max_pages_per_call;
-			}
-		}
-		# after delay transfer pages from $rc_pages_midterm to @updList_midterm
-		while(my ($title, $timestamp_unix) = each %{$self->{'rc_pages_midterm'}}){
-			if($timestamp_unix + $self->{'delay'} < $now){
-				delete $self->{'rc_pages_midterm'}->{$title};
-				$camelbot->msg(2, ' mid term update of page: '. $title);
-				push @updList_midterm, $title;
-				last if @updList_midterm >= $max_pages_per_call;
-			}
-		}
-		my $numArticles = scalar(@updList_shortterm);
-		if($numArticles >= 100 or $camelbot->{'verbosity'} >= 2){
-			$camelbot->msg(1, "starting notification check of $numArticles (of " . 
-				($numArticles + keys(%{$self->{'rc_pages_shortterm'}})) . ") articles.");
-		}
-		# all pages in @updList_shortterm shall be treated now.
-		for my $page(@updList_shortterm){
-			# notifier on particular edits; there needs to be some delay, because 
-			# otherwise it may occur that the notification is faster than the saving 
-			# process itself.
-			$camelbot->msg(3, "fetch page '$page'.");
-			$camelbot->notifier($page);
-		}
-		if($numArticles >= 100){
-			$camelbot->msg(2, "end of notification check of $numArticles articles.");
-		}
-		# all pages in @updList_midterm shall be treated now.
-		my $cnt = 0;
-		$numArticles = scalar(@updList_midterm);
-		if($numArticles >= 100 or $camelbot->{'verbosity'} >= 2){
-			$camelbot->msg(1, "starting mid term checks of $numArticles (of " . 
-				($numArticles + keys(%{$self->{'rc_pages_midterm'}})) . ") articles.");
-		}
-		for my $page(@updList_midterm){
-			$camelbot->msg(3, "fetch page '$page' (".(++$cnt).").");
-			my $text = $camelbot->{'mw_bot'}->get_text($page);
-			if(defined $text and $camelbot->is_allowed(\$text, $page)){
-				my $text_bak = $text;
-				my $changes = $camelbot->cleanup_wiki_page(\$text, $page);
-				if($text_bak ne $text){
-					my $summary = 'kleinere korrekturen ('.
-						(join ', ', grep {$changes->{$_} > 0} keys %$changes).
-						'). feedback bitte auf [[user talk:lustiger_seth]] melden.';
-					$camelbot->time_management();
-					$camelbot->save_wiki_page($page, $summary, \$text, \$text_bak);
+		my $min_info_number = 10; # for debugging/info only
+		# cope with short-term list
+		#  after delay transfer pages from $rc_pages_shortterm to @updList_shortterm.
+		#  use oldest $max_pages_per_call articles only
+		my @loop_array = sort { # sort by timestamp
+			$self->{'rc_pages_shortterm'}->{$a} <=> $self->{'rc_pages_shortterm'}->{$b}
+			} keys %{$self->{'rc_pages_shortterm'}});
+		splice @loop_array, $max_pages_per_call;
+		if(@loop_array > 0){
+			my @updList_shortterm;
+			my $oldest_date = $self->{'rc_pages_shortterm'}->{$loop_array[0]};
+			my $newest_date = $self->{'rc_pages_shortterm'}->{$loop_array[-1]};
+			for my $title(@loop_array){
+				my $timestamp_unix = $self->{'rc_pages_shortterm'}->{$title};
+				if($timestamp_unix + $self->{'delay_short'} < $now){
+					delete $self->{'rc_pages_shortterm'}->{$title};
+					$camelbot->msg(2, ' short term update of page: '. $title);
+					push @updList_shortterm, $title;
 				}
-				$camelbot->update_maintenance_lists($page, \$text, 'all_types', 
-					$self->{'rc_pages_maintenance'});
-			}else{
-				$camelbot->msg(2, "could not fetch page '$page'. maybe deleted already", 
-					'notice');
+			}
+			# print some information
+			my $numArticles = scalar(@updList_shortterm);
+			if($numArticles >= $min_info_number or $camelbot->{'verbosity'} >= 2){
+				$camelbot->msg(1, "starting notification check of $numArticles (of " . 
+					($numArticles + keys(%{$self->{'rc_pages_shortterm'}})) . ") articles, " .
+					"dated from $oldest_date to $newest_date.");
+			}
+			# all pages in @updList_shortterm shall be treated now.
+			for my $page(@updList_shortterm){
+				# notifier on particular edits; there needs to be some delay, because 
+				# otherwise it may occur that the notification is faster than the saving 
+				# process itself.
+				$camelbot->msg(3, "fetch page '$page'.");
+				$camelbot->notifier($page);
+			}
+			if($numArticles >= $min_info_number){
+				$camelbot->msg(2, "end of notification check of $numArticles articles.");
 			}
 		}
-		if($numArticles >= 100){
-			$camelbot->msg(2, "end of mid term checks of $numArticles articles.");
+		# cope with mid-term list
+		#  after delay transfer pages from $rc_pages_midterm to @updList_midterm
+		my @loop_array = sort {
+			$self->{'rc_pages_midterm'}->{$a} <=> $self->{'rc_pages_midterm'}->{$b}
+			} keys %{$self->{'rc_pages_midterm'}});
+		splice @loop_array, $max_pages_per_call;
+		if(@loop_array > 0){
+			my @updList_midterm;
+			my $oldest_date = $self->{'rc_pages_shortterm'}->{$loop_array[0]};
+			my $newest_date = $self->{'rc_pages_shortterm'}->{$loop_array[-1]};
+			for my $title(@loop_array){
+				my $timestamp_unix = $self->{'rc_pages_midterm'}->{$title};
+				if($timestamp_unix + $self->{'delay'} < $now){
+					delete $self->{'rc_pages_midterm'}->{$title};
+					$camelbot->msg(2, ' mid term update of page: '. $title);
+					push @updList_midterm, $title;
+				}
+			}
+			#  print some information
+			$numArticles = scalar(@updList_midterm);
+			if($numArticles >= $min_info_number or $camelbot->{'verbosity'} >= 2){
+				$camelbot->msg(1, "starting mid term checks of $numArticles (of " . 
+					($numArticles + keys(%{$self->{'rc_pages_midterm'}})) . ") articles, " .
+					"dated from $oldest_date to $newest_date.");
+			}
+			#  all pages in @updList_midterm shall be treated now.
+			my $cnt = 0;
+			for my $page(@updList_midterm){
+				$camelbot->msg(3, "fetch page '$page' (".(++$cnt).").");
+				my $text = $camelbot->{'mw_bot'}->get_text($page);
+				if(defined $text and $camelbot->is_allowed(\$text, $page)){
+					my $text_bak = $text;
+					my $changes = $camelbot->cleanup_wiki_page(\$text, $page);
+					if($text_bak ne $text){
+						my $summary = 'kleinere korrekturen ('.
+							(join ', ', grep {$changes->{$_} > 0} keys %$changes).
+							'). feedback bitte auf [[user talk:lustiger_seth]] melden.';
+						$camelbot->time_management();
+						$camelbot->save_wiki_page($page, $summary, \$text, \$text_bak);
+					}
+					$camelbot->update_maintenance_lists($page, \$text, 'all_types', 
+						$self->{'rc_pages_maintenance'});
+				}else{
+					$camelbot->msg(2, "could not fetch page '$page'. maybe deleted already", 
+						'notice');
+				}
+			}
+			if($numArticles >= $min_info_number){
+				$camelbot->msg(2, "end of mid term checks of $numArticles articles.");
+			}
 		}
 	}
 
@@ -2890,17 +2913,15 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			# delete multiple entries of same page
 			$camelbot->msg(2, 'delete multiple entries');
 			my %dbl_counter;
-			map {
-				if(defined $dbl_counter{$_->{'page_with_ns'}}){
-					++$dbl_counter{$_->{'page_with_ns'}};
-				}else{
-					$dbl_counter{$_->{'page_with_ns'}} = 1;
-				}
-			} @$new_rc_pages;
 			$new_rc_pages = [
 				grep {
-					--$dbl_counter{$_->{'page_with_ns'}} ==0 
-				} @$new_rc_pages
+					if(exists $dbl_counter{$_->{'page_with_ns'}}){
+						$dbl_counter{$_->{'page_with_ns'}} = 0;
+					}else{
+						$dbl_counter{$_->{'page_with_ns'}} = 1;
+					}
+					$dbl_counter{$_->{'page_with_ns'}};
+				} sort {$b->{'timestamp_unix'} <=> $a->{'timestamp_unix'}} @$new_rc_pages
 			];
 			if(@$new_rc_pages > 0){
 				$continue_timestamp = $new_rc_pages->[-1]->{'timestamp'};
