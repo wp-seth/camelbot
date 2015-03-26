@@ -1521,7 +1521,7 @@ sub syntaxCheck{
 			$self->{'wm_lang'} = $1;
 			$self->{'wm_proj_type'} = $2;
 			$self->{'wm_proj'} = $self->{'wm_lang'} . $self->{'wm_proj_type'};
-			$self->{'wm_proj'} =~ s/wiki[pm]edia\z/wiki/;
+			$self->{'wm_proj'} =~ s/wiki\K[pm]edia\z//;
 		}
 		$self->{'mw_bot'} = MediaWiki::Bot->new({
 			assert      => 'bot',
@@ -2752,7 +2752,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		#  use oldest $max_pages_per_call articles only
 		my @loop_array = sort { # sort by timestamp
 			$self->{'rc_pages_shortterm'}->{$a} <=> $self->{'rc_pages_shortterm'}->{$b}
-			} keys %{$self->{'rc_pages_shortterm'}});
+			} keys %{$self->{'rc_pages_shortterm'}};
 		splice @loop_array, $max_pages_per_call;
 		if(@loop_array > 0){
 			my @updList_shortterm;
@@ -2787,9 +2787,9 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		}
 		# cope with mid-term list
 		#  after delay transfer pages from $rc_pages_midterm to @updList_midterm
-		my @loop_array = sort {
+		@loop_array = sort {
 			$self->{'rc_pages_midterm'}->{$a} <=> $self->{'rc_pages_midterm'}->{$b}
-			} keys %{$self->{'rc_pages_midterm'}});
+			} keys %{$self->{'rc_pages_midterm'}};
 		splice @loop_array, $max_pages_per_call;
 		if(@loop_array > 0){
 			my @updList_midterm;
@@ -2804,7 +2804,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 				}
 			}
 			#  print some information
-			$numArticles = scalar(@updList_midterm);
+			my $numArticles = scalar(@updList_midterm);
 			if($numArticles >= $min_info_number or $camelbot->{'verbosity'} >= 2){
 				$camelbot->msg(1, "starting mid term checks of $numArticles (of " . 
 					($numArticles + keys(%{$self->{'rc_pages_midterm'}})) . ") articles, " .
