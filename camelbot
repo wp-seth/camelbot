@@ -221,7 +221,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.20.20150323';
+$main::VERSION = '1.21.20150329';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -902,7 +902,7 @@ sub syntaxCheck{
 		my $finished = 0;
 		my @results;
 		while(!$finished){
-			my ($pages, $finished) = $self->api_cont($query, $mw_options);
+			(my $pages, $finished) = $self->api_cont($query, $mw_options);
 			map {$results[$_->{'id'}] = $_->{'description'}} @{$pages->{'query'}->{'abusefilters'}};
 		}
 		return \@results;
@@ -2753,11 +2753,11 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		my @loop_array = sort { # sort by timestamp
 			$self->{'rc_pages_shortterm'}->{$a} <=> $self->{'rc_pages_shortterm'}->{$b}
 			} keys %{$self->{'rc_pages_shortterm'}};
-		splice @loop_array, $max_pages_per_call;
 		if(@loop_array > 0){
+			splice @loop_array, $max_pages_per_call if @loop_array > $max_pages_per_call;
 			my @updList_shortterm;
-			my $oldest_date = $self->{'rc_pages_shortterm'}->{$loop_array[0]};
-			my $newest_date = $self->{'rc_pages_shortterm'}->{$loop_array[-1]};
+			my $oldest_date = strftime("%Y-%m-%d %H:%M:%S", gmtime($self->{'rc_pages_shortterm'}->{$loop_array[0]}));
+			my $newest_date = strftime("%Y-%m-%d %H:%M:%S", gmtime($self->{'rc_pages_shortterm'}->{$loop_array[-1]})); 
 			for my $title(@loop_array){
 				my $timestamp_unix = $self->{'rc_pages_shortterm'}->{$title};
 				if($timestamp_unix + $self->{'delay_short'} < $now){
@@ -2790,11 +2790,11 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		@loop_array = sort {
 			$self->{'rc_pages_midterm'}->{$a} <=> $self->{'rc_pages_midterm'}->{$b}
 			} keys %{$self->{'rc_pages_midterm'}};
-		splice @loop_array, $max_pages_per_call;
 		if(@loop_array > 0){
+			splice @loop_array, $max_pages_per_call if @loop_array > $max_pages_per_call;
 			my @updList_midterm;
-			my $oldest_date = $self->{'rc_pages_shortterm'}->{$loop_array[0]};
-			my $newest_date = $self->{'rc_pages_shortterm'}->{$loop_array[-1]};
+			my $oldest_date = strftime("%Y-%m-%d %H:%M:%S", gmtime($self->{'rc_pages_midterm'}->{$loop_array[0]}));
+			my $newest_date = strftime("%Y-%m-%d %H:%M:%S", gmtime($self->{'rc_pages_midterm'}->{$loop_array[-1]})); 
 			for my $title(@loop_array){
 				my $timestamp_unix = $self->{'rc_pages_midterm'}->{$title};
 				if($timestamp_unix + $self->{'delay'} < $now){
@@ -2913,18 +2913,15 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			# delete multiple entries of same page
 			$camelbot->msg(2, 'delete multiple entries');
 			my %dbl_counter;
-			$new_rc_pages = [
+			$new_rc_pages = [reverse
 				grep {
-					if(exists $dbl_counter{$_->{'page_with_ns'}}){
-						$dbl_counter{$_->{'page_with_ns'}} = 0;
-					}else{
-						$dbl_counter{$_->{'page_with_ns'}} = 1;
-					}
+					$dbl_counter{$_->{'page_with_ns'}} = (exists $dbl_counter{$_->{'page_with_ns'}}) ? 0 : 1;
 					$dbl_counter{$_->{'page_with_ns'}};
 				} sort {$b->{'timestamp_unix'} <=> $a->{'timestamp_unix'}} @$new_rc_pages
 			];
 			if(@$new_rc_pages > 0){
 				$continue_timestamp = $new_rc_pages->[-1]->{'timestamp'};
+				$camelbot->msg(2, 'last timestamp: ' . strftime("%Y-%m-%d %H:%M:%S", gmtime($continue_timestamp)));
 				while(@$new_rc_pages > 0 
 						and $new_rc_pages->[-1]->{'timestamp'} eq $continue_timestamp){
 					pop @$new_rc_pages;
