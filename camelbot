@@ -221,7 +221,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.21.20150329';
+$main::VERSION = '1.21.20150330';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -2881,7 +2881,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			}
 			# update edit filter index
 			if($rc_msg->{'ns_id'} == 4 and $update{'editfilter'} == 0
-					and $rc_msg->{'page'} =~ /^$self->{'re_edit_filter_name'}\//
+					and $rc_msg->{'page_with_ns'} =~ /^$self->{'re_edit_filter_name'}\//
 			){
 				$update{'editfilter'} = 1;
 			}
@@ -3155,7 +3155,7 @@ if($params->{'rc-monitoring'}){
 		#use POE;
 		#$poe_kernel->run();
 	}elsif($params->{'rc-monitoring'} eq 'db'){
-		#$camelbot->update_edit_filter_index();
+		$camelbot->update_edit_filter_index();
 		my $camelbot_rc = CamelBotRC->new($camelbot);
 		$camelbot_rc->db_rc_monitoring();
 	}else{
