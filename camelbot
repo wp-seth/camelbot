@@ -221,7 +221,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.21.20150330';
+$main::VERSION = '1.22.20150412';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -1653,7 +1653,7 @@ sub syntaxCheck{
 			# ASINs are unwanted in w:de
 			my $notify = 0;
 			my $num_matches =()= $text =~ /$self->{'re_maintenance'}->{'ASIN'}/g;
-			if($num_matches > 0){
+			if($num_matches > 0 and $page ne 'Amazon Standard Identification Number'){
 				# compare with older version
 				if(@hist > 1 and defined $hist[1]->{'revid'}){
 					my $text_prev_version = $self->{'mw_bot'}->get_text($page, $hist[1]->{'revid'});
@@ -2079,100 +2079,83 @@ sub syntaxCheck{
 	sub search_sbl_attempts{
 		my $self   = shift;
 		my $params = shift;
-		unless(exists $params->{'proj'}){
-			$params->{'proj'} = $self->{'wm_proj'};
-		}
-		unless(exists $params->{'sbl'}){
-			$params->{'sbl'} = $self->{'wm_proj'};
-		}
+		$params->{'proj'} = $self->{'wm_proj'} unless defined $params->{'proj'};
+		$params->{'sbl'}  = $self->{'wm_proj'} unless defined $params->{'sbl'};
 		my @large_projects = qw(ca ceb de en es fr it ja nl no pl pt ru sv uk vi war zh);
 		map {$_ .= 'wiki'} @large_projects;
 		# search for given regexp
 		if(exists $params->{'regexp'}){
-			# search current project for given regexp
-			if($params->{'proj'} eq $self->{'wm_proj'}){
-				my $blocked_edits = $self->search_sbl_blocked_log(qr/$params->{'regexp'}/);
-				for my $edit(@$blocked_edits){
-					print "$edit->{'timestamp'}, $edit->{'url'}, $edit->{'user'}; " . 
-						$edit->{'title'} . "\n";
-				}
-			}elsif($params->{'proj'} eq 'large'){
+			my %results = ();
+			if($params->{'proj'} eq 'large'){
 				# search large wikipedias for a given regexp; return all single spam 
 				# attempts
-				my %results = ();
 				for my $proj(@large_projects){
 					$results{$proj} = $self->search_sbl_blocked_log(
 						qr/$params->{'regexp'}/, $proj);
 				}
-				while(my ($proj, $blocked_edits) = each %results){
-					$self->msg(1, "$proj: ".scalar(@$blocked_edits));
-					for my $edit(@$blocked_edits){
-						print "$edit->{'timestamp'}, $edit->{'url'}, $edit->{'user'}; " . 
-							$edit->{'title'} . "\n";
-					}
-				}
+			}elsif($params->{'proj'} eq $self->{'wm_proj'}){
+				# search current project for given regexp
+				$results{$params->{'proj'}} = $self->search_sbl_blocked_log(
+						qr/$params->{'regexp'}/);
 			}else{
 				$self->msg(0, 'not implemented yet', 'error');
+				#$results{$params->{'proj'}} = $self->search_sbl_blocked_log(
+				#		qr/$params->{'regexp'}/, $params->{'proj'});
 			}
-		}else{
+			# print results
+			while(my ($proj, $blocked_edits) = each %results){
+				$self->msg(1, "$proj: ".scalar(@$blocked_edits));
+				for my $edit(@$blocked_edits){
+					print "$edit->{'timestamp'}, $edit->{'url'}, $edit->{'user'}; " . 
+						$edit->{'title'} . "\n";
+				}
+			}
+		}else{ # if no explicite regexp is set, then use all sbl entries
 			# search large wikipedias for all entries of meta sbl
+			my $table_header = '{| class="wikitable sortable" ' .  # }
+				'style="table-layout:fixed; width:100%;"' . "\n" . 
+				'! style="width:300px;" | regexp || ';
+			my $table_row_begin = "|-\n| style=\"overflow:hidden;\" |";
 			if($params->{'sbl'} =~ /^meta(?:wiki)?\z/){
+				my $sbl_meta = $self->get_sbl_entries('meta');
+				$self->msg(1, 'found ' . scalar(@$sbl_meta) . ' entries in sbl.');
+				my $projects;
 				if($params->{'proj'} eq 'large'){
-					my $sbl_meta = $self->get_sbl_entries('meta');
-					$self->msg(1, 'found ' . scalar(@$sbl_meta) . ' entries in sbl.');
-					print '{| class="wikitable sortable" style="table-layout:fixed; width:100%;"' . 
-						"\n" . '! style="width:300px;" | regexp || ' . 
-						(join ' || ', sort @large_projects) . ' || sum' . "\n";
-					for my $regexp(@$sbl_meta){
-						my %results = ();
-						my $sum = 0;
-						for my $proj(@large_projects){
-							$results{$proj} = $self->search_sbl_blocked_log($regexp, $proj);
-							$sum += $results{$proj};
-						}
-						print "|-\n| style=\"overflow:hidden;\" | $regexp || " . 
-							(join ' || ', (map {scalar(@{$results{$_}})} sort keys %results));
-						print ' || ' . $sum . "\n";
-					}
-					print "|}\n"; # }
+					$projects = \@large_projects;
 				}elsif($params->{'proj'} eq 'all'){
-					# todo:
-					my ($http_status, $projects) = $self->get_http_content(
+					my ($http_status, $all_projects) = $self->get_http_content(
 						'https://noc.wikimedia.org/conf/all.dblist');
-					$projects = [split /\n/, $projects];
-					my $sbl_meta = $self->get_sbl_entries('meta');
-					$self->msg(1, 'found ' . scalar(@$sbl_meta) . ' entries in sbl.');
-					print '{| class="wikitable sortable" style="table-layout:fixed; width:100%;"' . 
-						"\n" . '! style="width:300px;" | regexp || ' . 
-						(join ' || ', sort @$projects) . ' || sum' . "\n";
+					$projects = [split /\n/, $all_projects];
+				}else{
+					$self->msg(0, 'not implemented yet', 'error');
+				}
+				if(defined $projects){
+					print $table_header . (join ' || ', sort @$projects) . " || sum\n";
 					for my $regexp(@$sbl_meta){
 						my %results = ();
 						my $sum = 0;
 						for my $proj(@$projects){
 							$results{$proj} = $self->search_sbl_blocked_log($regexp, $proj);
-							$sum += $results{$proj};
+							$sum += @{$results{$proj}};
 						}
-					#	print "|-\n| style=\"overflow:hidden;\" | $regexp || " . 
-					#		(join ' || ', (map {scalar(@{$results{$_}})} sort keys %results));
-					#	print ' || ' . $sum . "\n";
+						print "$table_row_begin $regexp || " . 
+							(join ' || ', (map {scalar(@{$results{$_}})} sort keys %results));
+						print ' || ' . $sum . "\n";
 					}
-					print "|}\n"; # }
-				}else{
-					$self->msg(0, 'not implemented yet', 'error');
+					print "|}\n";
 				}
 			}elsif($params->{'sbl'} eq $self->{'wm_proj'} 
 					and $params->{'proj'} eq $self->{'wm_proj'}){
 				# search current mediawiki for all entries of its sbl
 				my $proj = $self->{'wm_proj'};
-				my $sbl = $self->get_sbl_entries();
-				$self->msg(1, 'found '.scalar(@$sbl).' entries in sbl.');
-				print '{| class="wikitable sortable" style="table-layout:fixed; width:100%;"' . 
-					"\n" . '! style="width:400px;" | regexp || ' . "$proj\n";
+				my $sbl  = $self->get_sbl_entries();
+				$self->msg(1, 'found ' . scalar(@$sbl) . ' entries in sbl.');
+				print $table_header . "$proj\n";
 				for my $regexp(@$sbl){
-					my $num_hits = $self->search_sbl_blocked_log($regexp, $proj);
-					print "|-\n| style=\"overflow:hidden;\" | $regexp || $num_hits\n";
+					my $results = $self->search_sbl_blocked_log($regexp, $proj);
+					print "$table_row_begin $regexp || " . scalar(@$results) . "\n";
 				}
-				print "|}\n"; # }
+				print "|}\n";
 			}else{
 				$self->msg(0, 'not implemented yet', 'error');
 			}
@@ -2757,7 +2740,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			splice @loop_array, $max_pages_per_call if @loop_array > $max_pages_per_call;
 			my @updList_shortterm;
 			my $oldest_date = strftime("%Y-%m-%d %H:%M:%S", gmtime($self->{'rc_pages_shortterm'}->{$loop_array[0]}));
-			my $newest_date = strftime("%Y-%m-%d %H:%M:%S", gmtime($self->{'rc_pages_shortterm'}->{$loop_array[-1]})); 
+			my $newest_date = strftime("%Y-%m-%d %H:%M:%S", gmtime($self->{'rc_pages_shortterm'}->{$loop_array[-1]}));
 			for my $title(@loop_array){
 				my $timestamp_unix = $self->{'rc_pages_shortterm'}->{$title};
 				if($timestamp_unix + $self->{'delay_short'} < $now){
@@ -2794,7 +2777,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			splice @loop_array, $max_pages_per_call if @loop_array > $max_pages_per_call;
 			my @updList_midterm;
 			my $oldest_date = strftime("%Y-%m-%d %H:%M:%S", gmtime($self->{'rc_pages_midterm'}->{$loop_array[0]}));
-			my $newest_date = strftime("%Y-%m-%d %H:%M:%S", gmtime($self->{'rc_pages_midterm'}->{$loop_array[-1]})); 
+			my $newest_date = strftime("%Y-%m-%d %H:%M:%S", gmtime($self->{'rc_pages_midterm'}->{$loop_array[-1]}));
 			for my $title(@loop_array){
 				my $timestamp_unix = $self->{'rc_pages_midterm'}->{$title};
 				if($timestamp_unix + $self->{'delay'} < $now){
@@ -2881,7 +2864,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			}
 			# update edit filter index
 			if($rc_msg->{'ns_id'} == 4 and $update{'editfilter'} == 0
-					and $rc_msg->{'page_with_ns'} =~ /^$self->{'re_edit_filter_name'}\//
+					and $rc_msg->{'page'} =~ /^$self->{'re_edit_filter_name'}\//
 			){
 				$update{'editfilter'} = 1;
 			}
@@ -3206,9 +3189,9 @@ if(defined $params->{'save-as-html'}){
 	write_file($htmlfilename, {binmode => ':utf8'}, $html_cleaned);
 }
 
-if(defined $params->{'search-sbl-blocked-attempts'}){
-	if($params->{'search-sbl-blocked-attempts'} =~ /^(?:[a-z]+=[^;]*;){1,2}[a-z]+=[^;]*;?$/){
-		my @param_parts = split /;/, $params->{'search-sbl-blocked-attempts'};
+if(defined $params->{'search-sbl-attempts'}){
+	if($params->{'search-sbl-attempts'} =~ /^(?:[a-z]+=[^;]*;){1,2}[a-z]+=[^;]*;?$/){
+		my @param_parts = split /;/, $params->{'search-sbl-attempts'};
 		my $subparams;
 		map {
 			/^([a-z]+)\s*=\s*+([^;]*)/; 
@@ -3216,7 +3199,7 @@ if(defined $params->{'search-sbl-blocked-attempts'}){
 		} @param_parts;
 		$camelbot->search_sbl_attempts($subparams);
 	}else{
-		$camelbot->msg(0, "could not read param '$params->{'search-sbl-blocked-attempts'}'", 'error');
+		$camelbot->msg(0, "could not read param '$params->{'search-sbl-attempts'}'", 'error');
 	}
 }
 
