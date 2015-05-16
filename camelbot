@@ -232,7 +232,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.24.20150421';
+$main::VERSION = '1.25.201500516';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -571,7 +571,7 @@ sub syntaxCheck{
 					'"<br \/>"');
 				# === superfluous br-tag ===
 				$changes->{'superfluous br-tag'} = $self->test_and_replace($text, 
-					qr/^\*.*\K<(?:[\/\\]br\s*|br ?[.\\\/])>/m, 
+					qr/^\*.*\K<(?:[\/\\]br\s*|br ?[.\\\/])> *$/m, 
 					'""');
 				# === technically superfluous external links ===
 				if($page ne 'Hypertext Transfer Protocol Secure' and 
@@ -2563,7 +2563,8 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 					}
 					# get table content
 					my $table = $self->wikitable2array(\$wikitable);
-					my $num_cols = @{$table->{'header'}};
+					my $num_add_cols = @{$table->{'header'}} - 2;
+					$self->msg(1, "number of additional cols = $num_add_cols");
 					# check all old entries; remove entries if possible;
 					# search new entry, if not in array, then push
 					my $already_in_list = 0;
@@ -2583,10 +2584,10 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 						} @{$table->{'body'}}
 					];
 					# add new list entry
-					if(defined $new_entry and $already_in_list==0){
+					if(defined $new_entry and $already_in_list == 0){
 						$self->msg(1, "add new list entry '$page'");
 						# if table has more than 2 columns, then pad row
-						my @empty_cells = split //, (' ' x $num_cols);
+						my @empty_cells = split //, (' ' x $num_add_cols);
 						push @{$table->{'body'}}, [$new_entry, $self->get_date_iso(), @empty_cells];
 					}
 					# reset and refill maintenance list
