@@ -538,11 +538,23 @@ sub syntaxCheck{
 				'"$1\x5b$2]$3"');
 			# === checking of spelling/typography ===
 			$changes->{'abk..'} = $self->test_and_replace($text, 
-				qr/ (?:usw|ff)\.\K\. /m, 
+				qr/ (?:Chr|e\.(?: |&nbsp;)?V|ff|Jh|usw)\.\K\. /m, 
 				'" "');
+			$changes->{'abk.. in links'} = $self->test_and_replace($text, 
+				qr/\.\]\]\K\./m, 
+				'""');
 			$changes->{'%ig'} = $self->test_and_replace($text, 
 				qr/[0-9]\K(?: |&nbsp;)?%-ig/m, 
 				'"%ig"');
+			$changes->{'°C ([[WP:SVZ]])'} = $self->test_and_replace($text, 
+				qr/°\K(?: |&nbsp;|&thinsp;)C/m, 
+				'"C"');
+			$changes->{"whitespace nach gestorben-symbol"} = $self->test_and_replace($text, 
+				qr/\x{2020}\K(?! |&nbsp;)/m, 
+				'" "');
+			$changes->{"whitespace vor ref-tag"} = $self->test_and_replace($text, 
+				qr/(?<!\|)(?: |&(?:nbsp|thinsp);|\n)(?=<ref\b)/m, 
+				'""');
 			# === specific domains ===
 			# see [https://de.wikipedia.org/w/index.php?title=MediaWiki_Diskussion:
 			# Spam-blacklist&oldid=136131974#
@@ -573,6 +585,10 @@ sub syntaxCheck{
 				$changes->{'superfluous br-tag'} = $self->test_and_replace($text, 
 					qr/^\*.*\K<(?:[\/\\]br\s*|br ?[.\\\/])> *$/m, 
 					'""');
+				# === wrong white space before '%' ===
+				$changes->{'white space before %; see [[WP:SVZ]]'} = $self->test_and_replace($text, 
+					qr/&(?:nbsp|thinsp|#x202f|#8239);%/m, 
+					'" %"');
 				# === technically superfluous external links ===
 				if($page ne 'Hypertext Transfer Protocol Secure' and 
 					 $page ne 'Hypertext_Transfer_Protocol_Secure'){
@@ -590,6 +606,10 @@ sub syntaxCheck{
 				$changes->{'redundant link description'} = $self->test_and_replace($text, 
 					qr/\[\[\s*+([^|\]\[]+\S)\s*\|\s*+\1\s*+\]\]/m, 
 					'"[[$1]]"');
+				# === zeros ===
+				$changes->{'zeros'} = $self->test_and_replace($text, 
+					qr/((?:\{\{0\}\}){2,})/m, 
+					'"{{0|" . ("0"x(length($1)/5)) . "}}"');
 			}
 			# === tests ===
 			#$self->test_and_replace($text, 
