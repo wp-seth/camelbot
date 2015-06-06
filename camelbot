@@ -232,7 +232,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.25.201500516';
+$main::VERSION = '1.26.201500606';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -380,10 +380,17 @@ sub syntaxCheck{
 			're_url_rear'    => qr/ # no trailing points
 				(?:[^\]\[<>"'\x00-\x20\x7F)]|\)(?!\s))*
 				(?:[^\]\[<>"'\x00-\x20\x7F).]|\)(?!\s))/x,
-			're_maintenance' => {
-				'ASIN'      => qr/\bASIN[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/,
-				'traditionsverband.de' => qr/\btraditionsverband\.de\b/,
-				'cat dead'  => qr/\[\[\s*(?i:category|kategorie):\s*[Gg]estorben[\s|_]$current_year\s*(?:\|[^\]]*)?\]\]/,
+			'maintenance' => {
+				're' => {
+					'ASIN'      => qr/\bASIN[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/,
+					'traditionsverband.de' => qr/\btraditionsverband\.de\b/,
+					'cat dead'  => qr/\[\[\s*(?i:category|kategorie):\s*[Gg]estorben[\s|_]$current_year\s*(?:\|[^\]]*)?\]\]/,
+				},
+				'exceptions' => {
+					'ASIN'      => qr/^Amazon Standard Identification Number\z/,
+					'traditionsverband.de' => undef,
+					'cat dead'  => undef,
+				},
 			},
 			# 0 = don't show diff; 1 = show a diff, 2 = gui
 			'showdiff'       => $params->{'showdiff'} // 0, 
@@ -549,12 +556,12 @@ sub syntaxCheck{
 			$changes->{'°C ([[WP:SVZ]])'} = $self->test_and_replace($text, 
 				qr/°\K(?: |&nbsp;|&thinsp;)C/m, 
 				'"C"');
-			$changes->{"whitespace nach gestorben-symbol"} = $self->test_and_replace($text, 
-				qr/\x{2020}\K(?! |&nbsp;)/m, 
-				'" "');
+			#$changes->{"whitespace nach gestorben-symbol"} = $self->test_and_replace($text, 
+			#	qr/\x{2020}\K(?! |&nbsp;)/m, 
+			#	'" "');
 			$changes->{"whitespace vor ref-tag"} = $self->test_and_replace($text, 
-				qr/(?<!\|)(?: |&(?:nbsp|thinsp);|\n)(?=<ref\b)/m, 
-				'""');
+				qr/(?<![|=°])(?<!<\/sup>)(?: |&(?:nbsp|thinsp);)(?=<ref\b)/m, 
+				'""'); # \n will lead to false positives
 			# === specific domains ===
 			# see [https://de.wikipedia.org/w/index.php?title=MediaWiki_Diskussion:
 			# Spam-blacklist&oldid=136131974#
@@ -1730,12 +1737,12 @@ sub syntaxCheck{
 		if(defined $text){
 			# ASINs are unwanted in w:de
 			my $notify = 0;
-			my $num_matches =()= $text =~ /$self->{'re_maintenance'}->{'ASIN'}/g;
-			if($num_matches > 0 and $page ne 'Amazon Standard Identification Number'){
+			my $num_matches =()= $text =~ /$self->{'maintenance'}->{'re'}->{'ASIN'}/g;
+			if($num_matches > 0 and $page !~ /$self->{'maintenance'}->{'exceptions'}->{'ASIN'}/){
 				# compare with older version
 				if(@hist > 1 and defined $hist[1]->{'revid'}){
 					my $text_prev_version = $self->{'mw_bot'}->get_text($page, $hist[1]->{'revid'});
-					my $num_matches_pv =()= $text_prev_version =~ /$self->{'re_maintenance'}->{'ASIN'}/g;
+					my $num_matches_pv =()= $text_prev_version =~ /$self->{'maintenance'}->{'re'}->{'ASIN'}/g;
 					if($num_matches_pv < $num_matches){
 						$notify = 1;
 					}
@@ -2554,11 +2561,16 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass sich in einem artikel ein verweis auf jene domain befindet, meldet er das nach ca. 30 minuten hier auf dieser seite. auch das loeschen von eintraegen, die einen solchen verweis nicht mehr enthalten, uebernimmt CamelBot.\n
 == liste ==\n",
 			);
-			for my $mt_type(keys %{$self->{'re_maintenance'}}){
+			for my $mt_type(keys %{$self->{'maintenance'}->{'re'}}){
 				if(($type eq $mt_type or $type eq 'all_types') and 
-					(not defined $page or $$text =~ /$self->{'re_maintenance'}->{$mt_type}/)
+					(not defined $page or $$text =~ /$self->{'maintenance'}->{'re'}->{$mt_type}/)
 				){
 					$self->msg(1, "check '$mt_type'");
+					if(defined $page 
+						and defined $self->{'maintenance'}->{'exceptions'}->{$mt_type} 
+						and $page =~ /$self->{'maintenance'}->{'exceptions'}->{$mt_type}/){
+						next;
+					}
 					# todo: how to cope with cat dead?
 					next if $mt_type eq 'cat dead';# and defined $$text 
 					#	and $$text =~/(?:[cC]ategory|[kK]ategorie)\s*:\s*[nN]ekrolog/;
@@ -2599,7 +2611,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 								$page_content = $self->{'mw_bot'}->get_text($page_from_list);
 							}
 							# return value for grep
-							$page_content =~ /$self->{'re_maintenance'}->{$mt_type}/ 
+							$page_content =~ /$self->{'maintenance'}->{'re'}->{$mt_type}/ 
 								or $already_in_list;
 						} @{$table->{'body'}}
 					];
@@ -2891,7 +2903,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 					if($text_bak ne $text){
 						my $summary = 'kleinere korrekturen ('.
 							(join ', ', grep {$changes->{$_} > 0} keys %$changes).
-							'). feedback bitte auf [[user talk:lustiger_seth]] melden.';
+							'), siehe [[user:CamelBot]].';
 						$camelbot->time_management();
 						$camelbot->save_wiki_page($page, $summary, \$text, \$text_bak);
 					}
