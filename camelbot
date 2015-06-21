@@ -232,7 +232,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.26.201500606';
+$main::VERSION = '1.27.201500621';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -410,11 +410,13 @@ sub syntaxCheck{
 	}
 
 	sub api_cont{
-		my $self       = shift;
-		my $query      = shift;
-		my $mw_options = shift;
+		my $self         = shift;
+		my $query        = shift;
+		my $mw_options   = shift;
+		my $die_on_error = shift // 1;
 		my $finished = 0;
-		my $api_result = $self->api_simple($query, $mw_options);
+		$query->{'continue'} = '' unless exists $query->{'continue'};
+		my $api_result = $self->api_simple($query, $mw_options, $die_on_error);
 		if(defined $api_result->{'continue'}){
 			while(my ($k, $v) = each(%{$api_result->{'continue'}})){
 				$query->{$k} = $v;
@@ -958,7 +960,6 @@ sub syntaxCheck{
 		# private&abflimit=500
 		my $query = {
 			'action'         => 'query',
-			'continue'       => '',
 			'list'           => 'abusefilters', 
 			'abflimit'       => '500',
 			'abfprop'        => 'id|description',
@@ -1150,10 +1151,10 @@ sub syntaxCheck{
 		#my $ref = $self->{'mw_bot'}->contributions($options->{'username'}, 0, undef);
 		$self->{'mw_api'}->{config}->{api_url} = $self->{'mw_apiurl'};
 		my $query = {
-			action      => 'query',
-			list        => 'usercontribs', 
-			ucprop      => 'ids|title',
-			ucstart     => $ucstart,
+			'action'    => 'query',
+			'list'      => 'usercontribs', 
+			'ucprop'    => 'ids|title',
+			'ucstart'   => $ucstart,
 			'uclimit'   => defined $uclimit ? $uclimit : 100,
 		};
 		if(exists $options->{'username'}){
@@ -1167,23 +1168,18 @@ sub syntaxCheck{
 		$query->{'ucend'}   = $ucend if defined $ucend;
 		my $mw_options = {'max' => 1};
 		my %list_of_articles;
-		#while((keys %list_of_articles)<$uclimit and 
-		# (defined $ucend and $ucstart gt $ucend or not defined $ucend)){
-			#if(defined $ucstart and defined $ucend){
-			#	$self->msg(1, "ucstart = $ucstart, ucend = $ucend") 
-			#}
-			my $dont_die_on_error = 0; # 0 = dont die; 1 = die
-			my $tmp = $self->api_simple($query, $mw_options, $dont_die_on_error);
-			$ucstart = $tmp->{'query-continue'}->{'usercontribs'}->{'ucstart'};
-			$query->{'ucstart'} = $ucstart;
+		my $die_on_error = 1; # 0 = dont die; 1 = die
+		my $finished = 0;
+		while(!$finished){
+			(my $tmp, $finished) = $self->api_cont($query, $mw_options, !$die_on_error);
 			my $usercontribs = $tmp->{'query'}->{'usercontribs'};
 			if(defined $usercontribs){
 				for my $uc(@$usercontribs){
 					next if exists $list_of_articles{$uc->{'title'}};
-					$list_of_articles{$uc->{'title'}} = 1;
+					$list_of_articles{$uc->{'title'}} = $uc->{'revid'};
 				}
 			}
-		#}
+		}
 		return \%list_of_articles;
 	}
 
@@ -1272,59 +1268,32 @@ sub syntaxCheck{
 			}elsif(defined $options{'user_contribs'}){
 				$self->msg(1, 'searching for contributions of user:' . 
 					$options{'user_contribs'}->{'user'});
-				#my $ref = $self->{'mw_bot'}->contributions(
-				#	$options{'user_contribs'}->{'user'}, 0, undef);
-				#$options{'ucstart'}  = '2011-03-18T00:00:00Z';
-				#$options{'ucend'}    = '2011-03-16T00:00:00Z';
-				#$options{'uclimit'}  = '10';
-				#$options{'username'} = $options{'user_contribs'}->{'user'};
-				#$options{'namespace'} = 0;
-				#$self->get_user_contribs($options);
-				#my $mwapi = MediaWiki::API->new();
-				#$mw->{config}->{api_url} = 'https://de.wikipedia.org/w/api.php';
-				my $ucstart = '2011-03-18T00:00:00Z';
-				my $ucend = '2011-03-16T00:00:00Z';
-				my $query = {
-					action      => 'query',
-					list        => 'usercontribs', 
-					ucuser      => $options{'user_contribs'}->{'user'},
-					ucnamespace => 0,
-					ucprop      => 'ids|title',
-					ucstart     => $ucstart,
-					ucend       => $ucend,
-					uclimit     => '10',
+				my $uc_options = {
+					'ucstart'   => '2011-03-18T00:00:00Z',
+					'ucend'     => '2011-03-16T00:00:00Z',
+					'uclimit'   => '500',
+					'username'  => $options{'user_contribs'}->{'user'},
+					'namespace' => 0,
 				};
-				my $mw_options = {'max' => 1};
-				while($ucstart gt $ucend){
-					$self->msg(1, "ucstart = $ucstart, ucend = $ucend");
-					my $dont_die_on_error = 0; # 0 = dont die; 1 = die
-					my $tmp = $self->api_simple($query, $mw_options, $dont_die_on_error);
-					$ucstart = $tmp->{'query-continue'}->{'usercontribs'}->{'ucstart'};
-					$query->{'ucstart'} = $ucstart;
-					my $usercontribs = $tmp->{'query'}->{'usercontribs'};
-					if(defined $usercontribs){
-						for(@$usercontribs){
-							next if exists $old_page_0->{$_->{'title'}};
-							$old_page_0->{$_->{'title'}} = 1;
-							# $self->msg(1, $_->{'title'});
-							my $diff = $self->{'mw_bot'}->diff({
-								'revid' => $_->{'revid'},
-								'oldid' => 'prev',
-							});
-							# my $found = 0;
-							while($diff =~ /<td class=\"diff-deletedline\">(.*?)<\/td>/g){
-								if($1 =~ /($re_url*)/){
-									push @links, {
-										'title' => $_->{'title'},
-										'url' => $1,
-									};
-									# $found = 1;
-									last;
-								}
-							}
-							# print Dumper($diff) if $found;
+				$old_page_0 = $self->get_user_contribs($uc_options);
+				while(my ($page, $revid) = each %$old_page_0){
+					# $self->msg(1, $page);
+					my $diff = $self->{'mw_bot'}->diff({
+						'revid' => $revid,
+						'oldid' => 'prev',
+					});
+					# my $found = 0;
+					while($diff =~ /<td class=\"diff-deletedline\">(.*?)<\/td>/g){
+						if($1 =~ /($re_url*)/){
+							push @links, {
+								'title' => $page,
+								'url' => $1,
+							};
+							# $found = 1;
+							last;
 						}
 					}
+					# print Dumper($diff) if $found;
 				}
 			}
 			$self->msg(1, 'results (found '.@links.' links in '.
@@ -2116,7 +2085,6 @@ sub syntaxCheck{
 			# api.php?action=query&list=logevents&letype=spamblacklist&leprop=ids|title|type|user|timestamp|comment|details&continue=
 			my $query = {
 				'action'         => 'query',
-				'continue'       => '',
 				'list'           => 'logevents', 
 				'letype'         => 'spamblacklist',
 				'lelimit'        => '500',
@@ -3428,8 +3396,9 @@ if($params->{'usercontribs'}){
 	$options{'username'}      = 'seth';
 	$options{'ucstart'}       = '2011-12-14T00:00:00Z';
 	$options{'ucend'}         = undef; #'2010-12-14T00:00:00Z';
-	$options{'uclimit'}       = 269;
-	$camelbot->get_user_contribs(\%options);
+	$options{'uclimit'}       = 500;
+	my $contribs = $camelbot->get_user_contribs(\%options);
+	#print Dumper $contribs;
 }
 
 $camelbot->msg(2, 'finished');
