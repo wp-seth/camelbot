@@ -232,7 +232,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.27.201500621';
+$main::VERSION = '1.28.201500628';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -2099,6 +2099,9 @@ sub syntaxCheck{
 				my $curr_counter = scalar(@{$pages->{'query'}->{'logevents'}});
 				$log_counter += $curr_counter;
 				push @results, grep {
+						die "undefined url?" unless defined $_->{'params'}->{'url'};
+						$_->{'url'} = $_->{'params'}->{'url'};
+						delete $_->{'params'};
 						$_->{'url'} =~ /$regexp/
 				} @{$pages->{'query'}->{'logevents'}};
 				if($self->{'verbosity'} >= 3 and $curr_counter > 0){
