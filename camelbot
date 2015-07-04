@@ -232,7 +232,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.28.201500628';
+$main::VERSION = '1.29.20150629';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -2474,10 +2474,12 @@ sub syntaxCheck{
 			my $filter_descriptions = $self->get_abuse_filter_info();
 			# build summary
 			my $summary_thread_part = '';
-			my $summary = '('.(
+			my $summary = '(' . (
 				join ', ', 
 				map {
-					$summary_thread_part .= $filter_descriptions->[$_] // $new_topics{$_};
+					$summary_thread_part .= 
+						($_ =~ /^[0-9]+$/ and defined $filter_descriptions->[$_]) ? 
+						$filter_descriptions->[$_] : $new_topics{$_};
 					$summary_thread_part .= '; ';
 					/^[0-9]+$/ ? "#$_" : $_;
 				} # add '#' on rule numbers
@@ -2498,7 +2500,7 @@ sub syntaxCheck{
 					$result;
 				} 
 				keys %new_topics
-			).'): ';
+			) . '): ';
 			$summary .= substr($summary_thread_part, 0, -2); # delete last '; '
 			# now update page
 			$self->rebuild_table($lt_page, $tables, $summary);
@@ -2579,7 +2581,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 								$already_in_list = 1;
 							}elsif($_->[0] =~ /^\[\[(.*)\]\]$/){
 								my $page_from_list = $1;
-								$page_content = $self->{'mw_bot'}->get_text($page_from_list);
+								$page_content = $self->{'mw_bot'}->get_text($page_from_list) // ''; # may be deleted meanwhile
 							}
 							# return value for grep
 							$page_content =~ /$self->{'maintenance'}->{'re'}->{$mt_type}/ 
