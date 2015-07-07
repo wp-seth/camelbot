@@ -84,6 +84,9 @@ use POSIX qw/strftime/;       # format timestamp
 # sub get_abuse_filter_info
 # 	return some info on abuse filter rules
 #
+# sub get_diff
+# 	a more detailed version of MediaWiki::Bot::diff
+#
 # sub get_namespace_id
 # 	return namespace id of a given page
 #
@@ -113,6 +116,9 @@ use POSIX qw/strftime/;       # format timestamp
 #
 # sub get_user_contribs
 # 	get list of pages edited by user
+#
+# sub _handle_api_error
+# 	just a centralized short version of mw api error handling
 #
 # sub is_allowed
 # 	checks whether bot-template is placed on a page and forbids editing
@@ -210,6 +216,9 @@ use POSIX qw/strftime/;       # format timestamp
 #
 # CamelBot: other functions
 # ---------------
+# sub decode_html_entities
+# 	decode &gt;, &lt;, and &amp; in-place
+#
 # sub get_http_content
 # 	return content of a given url
 #
@@ -232,7 +241,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.29.20150629';
+$main::VERSION = '1.31.20150707';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -265,6 +274,9 @@ sub syntaxCheck{
 	my %params = ( # default cli params
 		'cat-add'            => 0,     # add pages to a category
 		'cat-change'         => 0,     # cat change
+		'db-access'          => 'replica.my.cnf', # filename with database access data 
+		'diff-from'          => undef, # page or revision id to get a diff from
+		'diff-to'            => undef, # version to diff to
 		'delete'             => 0,     # delete pages
 		'download-by-prefix' => undef, # download pages by prefix
 		'http-status'        => undef, # check reachability of url
@@ -292,6 +304,9 @@ sub syntaxCheck{
 	GetOptions(\%params,
 		'cat-add',
 		'cat-change|c',
+		'db-access=s',
+		'diff-from=s',
+		'diff-to=s',
 		'delete',
 		'download-by-prefix=s',
 		'http-status=s',
@@ -357,7 +372,6 @@ sub syntaxCheck{
 	use Time::Local;            # timegm
 	use Tk::DiffText;           # graphical diff tool
 	use URI::Escape;            # uri_unescape
-	#use WWW::Mechanize;         # big web browser
 
 	sub new{
 		my $class = shift;
@@ -366,6 +380,7 @@ sub syntaxCheck{
 		my $self = bless {
 			# 0 = don't ask user; 1  = ask user for every action
 			'ask_user'       => $params->{'ask_user'} // 0, 
+			'db'             => {'file' => $params->{'db_access'}}, 
 			# maximum number of edits per minute (-1 = inf)
 			'max_edits_per_min' => $params->{'max_edits_per_min'} // 5, 
 			'minor'          => $params->{'minor'} // 1, # 0 = non-minor; 1 = minor
@@ -409,9 +424,14 @@ sub syntaxCheck{
 		return $self;
 	}
 
+	sub DESTROY{
+		my $self = shift;
+		$self->{'db'}->{'handle'}->disconnect if defined $self->{'db'}->{'handle'};
+	}
+
 	sub api_cont{
 		my $self         = shift;
-		my $query        = shift;
+		my $query        = shift; # may be modified in this function
 		my $mw_options   = shift;
 		my $die_on_error = shift // 1;
 		my $finished = 0;
@@ -435,15 +455,14 @@ sub syntaxCheck{
 		my $query        = shift;
 		my $mw_options   = shift;
 		my $die_on_error = shift // 1;
+		$self->msg(3, Dumper($query));
 		my $api_result = $self->{'mw_api'}->api($query, $mw_options);
 		unless(defined $api_result){
-			my $err = 
-				$self->{'mw_api'}->{'error'}->{'code'}.': ' . 
-				$self->{'mw_api'}->{'error'}->{'details'};
 			my $caller_increment = 1;
-			$self->msg(0, $err, 'error', $caller_increment);
-			die $err if $die_on_error;
+			$self->_handle_api_error($caller_increment);
+			die if $die_on_error;
 		}
+		$self->msg(3, Dumper($api_result)) if defined $api_result;
 		return $api_result;
 	}
 
@@ -562,8 +581,9 @@ sub syntaxCheck{
 			#	qr/\x{2020}\K(?! |&nbsp;)/m, 
 			#	'" "');
 			$changes->{"whitespace vor ref-tag"} = $self->test_and_replace($text, 
-				qr/(?<![|=°])(?<!<\/sup>)(?: |&(?:nbsp|thinsp);)(?=<ref\b)/m, 
+				qr/(?<![|=°])(?<!<\/sup>)(?<!\}\})(?: |&(?:nbsp|thinsp);)(?=<ref\b)/m, 
 				'""'); # \n will lead to false positives
+			# + }} because of false positive: //de.wikipedia.org/w/index.php?title=Griechische_Staatsschuldenkrise&diff=143759791&oldid=143757358
 			# === specific domains ===
 			# see [https://de.wikipedia.org/w/index.php?title=MediaWiki_Diskussion:
 			# Spam-blacklist&oldid=136131974#
@@ -661,46 +681,78 @@ sub syntaxCheck{
 
 	sub _db_init{
 		my $self    = shift;
-		my $db_file = shift // $ENV{'HOME'}.'/replica.my.cnf';
 		my $proj    = shift // $self->{'wm_proj'};
 		unless(defined $proj){
 			$self->msg(0, '$proj is not defined', 'error');
-		}
-		# db connection parameters
-		my $db = {
-			'host' => $proj.'.labsdb',
-			'name' => $proj.'_p',
-		};
-		my $opened = open(my $INFILE, '<', $db_file);
-		unless($opened){
-			$self->msg(0, "could not read db conn file: $!", 'error');
 			return 0;
 		}
-		while(my $line = <$INFILE>){
-			$db->{'user'} = $1 if $line =~ /^\s*user='(.*)'/;
-			$db->{'pw'} = $1 if $line =~ /^\s*password='(.*)'/;
-		}
-		close($INFILE);
-		my $dbh = DBI->connect( # db connect
-			'DBI:mysql:'.$db->{'name'}.':'.$db->{'host'}.';mysql_client_found_rows=0',
-			$db->{'user'},
-			$db->{'pw'},
-			{	'RaiseError' => 1,
-				'AutoCommit' => 1,
-				'mysql_enable_utf8' => 1
+		if(defined $self->{'db'}->{'handle'} and 
+			defined $self->{'db'}->{'proj'} and 
+			$self->{'db'}->{'proj'} eq $proj){
+			# don't re-read db_file or reconnect, if still connected
+			return 2;
+		}else{
+			# check db conn file
+			unless(-e $self->{'db'}->{'file'}){
+				$self->msg(1, " db conn file: '$self->{'db'}->{'file'}' does not seem to exist.", 'warning');
+				if(substr($self->{'db'}->{'file'}, 0, 1) ne '/'){
+					$self->{'db'}->{'file'} = $ENV{'HOME'} . '/' . $self->{'db'}->{'file'};
+					if(-e $self->{'db'}->{'file'}){
+						$self->msg(1, " using db conn file: '$self->{'db'}->{'file'}'.");
+					}else{
+						# warning will appear soon
+						# $self->msg(0, " db conn file does not seem to exist.", 'error');
+					}
+				}
 			}
-		) or $self->msg(0, 'cannot connect to db: '.$DBI::errstr);
-		return $dbh;
+			# db connection parameters
+			$self->{'db'}->{'host'} = $proj . '.labsdb';
+			$self->{'db'}->{'name'} = $proj . '_p';
+			$self->{'db'}->{'port'} = '3306';
+			$self->{'db'}->{'user'} = '';
+			$self->{'db'}->{'pw'} = '';
+			my $opened = open(my $INFILE, '<', $self->{'db'}->{'file'});
+			unless($opened){
+				$self->msg(0, "could not read db conn file: $!", 'error');
+				return 0;
+			}
+			while(my $line = <$INFILE>){
+				$self->{'db'}->{'user'} = $1 if $line =~ /^\s*user='(.*)'/;
+				$self->{'db'}->{'pw'} = $1 if $line =~ /^\s*password='(.*)'/;
+				$self->{'db'}->{'port'} = $1 if $line =~ /^\s*port='?(.*?)'?\s*(?:#.*)?\n/;
+				$self->{'db'}->{'host'} = $1 if $line =~ /^\s*host='?(.*?)'?\s*(?:#.*)?\n/;
+			}
+			close($INFILE);
+			$self->msg(2, 'connect to db: ' . Dumper($self->{'db'}));
+			$self->{'db'}->{'handle'} = DBI->connect( # db connect
+				'DBI:mysql:' . 
+					'database=' . $self->{'db'}->{'name'} . 
+					';host=' . $self->{'db'}->{'host'} . 
+					';port=' . $self->{'db'}->{'port'} . 
+					';mysql_client_found_rows=0',
+				$self->{'db'}->{'user'},
+				$self->{'db'}->{'pw'},
+				{	'RaiseError' => 1,
+					'AutoCommit' => 1,
+					'mysql_enable_utf8' => 1
+				}
+			) or $self->msg(0, 'cannot connect to db: '.$DBI::errstr);
+			$self->{'db'}->{'proj'} = $proj;
+		}
+		return 1;
 	}
 
 	sub _db_query{
 		my $self  = shift;
-		my $dbh   = shift;
 		my $query = shift;
 		my $return_header = shift // 1;
-		my $sth = $dbh->prepare($query) 
-			or $self->msg(0, $dbh->errstr.' query = \''.$query.'\'');
-		return 0 unless defined $sth;
+		unless(defined $self->{'db'}->{'handle'}){
+			$self->msg(0, 'no databae handle', 'error');
+			return 0;
+		}
+		my $sth = $self->{'db'}->{'handle'}->prepare($query) 
+			or $self->msg(0, $self->{'db'}->{'handle'}->errstr.' query = \''.$query.'\'');
+		return 0 unless $sth;
 		$sth->execute;
 		my $names = $sth->{'NAME'}; # or NAME_lc if needed
 		my $rows_ref = $sth->fetchall_arrayref();
@@ -719,19 +771,18 @@ sub syntaxCheck{
 		}else{
 			$self->msg(0, '$proj is not defined.', 'error');
 		}
-		my $dbh = $self->_db_init(undef, $proj) or return undef;
+		$self->_db_init($proj) or return undef;
 		#print Dumper $db_query;
 		if(ref(\$db_query) ne 'SCALAR'){
 			#$db_query->[0] =~ s/\s+/ /g;
 			$db_query->[0] =~ s/^\s+|\s+\z//g;
 			$db_query = sprintf $db_query->[0], map {
 				/^-?(?:\d*\.\d+|\d+\.?)\z/ ? $_ :
-				$dbh->quote($_); #(not defined $_) ? 'NULL'  (will be done by quote, so ensure, using '%s' even on numbers)
+				$self->{'db'}->{'handle'}->quote($_); #(not defined $_) ? 'NULL'  (will be done by quote, so ensure, using '%s' even on numbers)
 			} @$db_query[1..@$db_query-1];
 		}
 		$self->msg(2, $db_query);
-		my $db_table = $self->_db_query($dbh, $db_query, $return_header);
-		$dbh->disconnect;
+		my $db_table = $self->_db_query($db_query, $return_header);
 		return $db_table;
 	}
 
@@ -866,12 +917,107 @@ sub syntaxCheck{
 					'minor'  => $self->{'minor'},
 					'title'  => $page,
 					'reason' => "Bot: $summary"
-				}) or die $self->{'mw_api'}->{'error'}->{'code'} . ': ' . 
-				$self->{'mw_api'}->{'error'}->{'details'};
+				}) or ($self->_handle_api_error() and die);
 			}else{
 				$self->{'user_answer'} = '';
 			}
 		}
+	}
+
+	sub get_diff{
+		my $self   = shift;
+		my $page   = shift;
+		my $diffto = shift // 'prev';
+		# get diff via api
+    my $query = {
+			'action'   => 'query',
+			'prop'     => 'revisions',
+			'rvdiffto' => $diffto,
+		};
+    if(defined $page->{'title'}){
+			$query->{titles}  = $page->{'title'};
+			$query->{rvlimit} = 1;
+    }elsif(defined $page->{'revid'}){
+			$query->{'revids'} = $page->{'revid'};
+    }else{
+			$self->msg(0, 'wrong param $page', 'error');
+			return undef;
+		}
+		my $diff = $self->api_simple($query) or return undef;
+		# extract diff info 
+    my @revids = keys %{$diff->{query}->{pages}};
+		$diff = $diff->{'query'}->{'pages'}->{$revids[0]}->{'revisions'}->[0];
+		my @diff_text = split /\n/, $diff->{'diff'}->{'*'};
+		my $diff_struct = [];
+		my $lin_num = 0;
+		for my $line(@diff_text){ # loop over all diff lines
+			next if $line =~ /^(?:<\/?tr>|<!-- .* -->)?\z/; # skip tr-tags
+			unless($line =~/^\s*<td [^>]*class="([^"]+)"[^>]*>(.*)<\/td>\z/){
+				$self->msg(0, "could not parse $line", 'error');
+			}
+			my $type = $1;
+			my $text = $2;
+			next if $1 =~ /^diff-(?:lineno|marker|context)\z/;
+			$text =~ s/^<div>|<\/div>\z//g; # truncate
+			$text = [
+				map {
+					$self->decode_html_entities(\$_);
+					my $text_type = ($_=~/^<(ins|del)\b[^>]*>(.*)<\/\1>\z/) ? $1 : 'equal';
+					{
+						'text' => ($text_type eq 'equal' ? $_ : $2),
+						'type' => $text_type,
+					};
+				} split /(<(?:(?:del|ins)\b[^>]*>[^<>]*<\/(?:del|ins))>)/, $text
+			];
+			if($type !~ /^diff-(?:added|deleted)line\z/){
+				$self->msg(0, "unknown type '$type'", 'warning');
+			}
+			$diff_struct->[$lin_num]->{$type} = $text;
+			++$lin_num if $type eq 'diff-addedline';
+		}
+		#print Dumper $diff_struct;
+		#looks like
+		#[{
+		#	'diff-deletedline' => [
+		#		{
+		#			'text' => 'some text ',
+		#			'type' => 'equal'
+		#		},
+		#		{
+		#			'type' => 'del',
+		#			'text' => 'some deleted text '
+		#		},
+		#		{
+		#			'text' => 'some other text',
+		#			'type' => 'equal'
+		#		}
+		#	],
+		#	'diff-addedline' => [
+		#		{
+		#			'text' => 'some text',
+		#			'type' => 'equal'
+		#		},
+		#		{
+		#			'text' => 'some better text',
+		#			'type' => 'ins'
+		#		},
+		#		{
+		#			'text' => 'some other text',
+		#			'type' => 'equal'
+		#		}
+		#	]
+		#}, ... ]
+		return {
+			'revid'     => $diff->{'revid'},
+			'parentid'  => $diff->{'parentid'},
+			'minor'     => $diff->{'minor'},
+			'user'      => $diff->{'user'},
+			'timestamp' => $diff->{'timestamp'},
+			'comment'   => $diff->{'comment'},
+			'from'      => $diff->{'diff'}->{'from'},
+			'to'        => $diff->{'diff'}->{'to'},
+			'diff'      => $diff_struct,
+		};
 	}
 
 	sub download_css{
@@ -973,6 +1119,15 @@ sub syntaxCheck{
 			map {$results[$_->{'id'}] = $_->{'description'}} @{$pages->{'query'}->{'abusefilters'}};
 		}
 		return \@results;
+	}
+
+	sub decode_html_entities{
+		my $self = shift;
+		my $text = shift;
+		$$text =~ s/&gt;/>/g;
+		$$text =~ s/&lt;/</g;
+		$$text =~ s/&amp;/&/g;
+		return 1;
 	}
 
 	sub get_http_content{
@@ -1149,7 +1304,7 @@ sub syntaxCheck{
 		my $user    = $options->{'username'} // $options->{'usernameprefix'};
 		$self->msg(1, "searching for contributions of user: $user");
 		#my $ref = $self->{'mw_bot'}->contributions($options->{'username'}, 0, undef);
-		$self->{'mw_api'}->{config}->{api_url} = $self->{'mw_apiurl'};
+		# $self->{'mw_api'}->{config}->{api_url} = $self->{'mw_apiurl'};  TODO: this line can be deleted, right?
 		my $query = {
 			'action'    => 'query',
 			'list'      => 'usercontribs', 
@@ -1181,6 +1336,14 @@ sub syntaxCheck{
 			}
 		}
 		return \%list_of_articles;
+	}
+
+	sub _handle_api_error{
+		my $self = shift;
+		my $caller_inc = shift // 0;
+		$self->msg(0, $self->{'mw_api'}->{'error'}->{'code'} . ': ' . 
+			$self->{'mw_api'}->{'error'}->{'details'}, 'error', 1 + $caller_inc);
+		return 1;
 	}
 
 	sub is_allowed{
@@ -1592,20 +1755,20 @@ sub syntaxCheck{
 		});
 		$self->{'mw_api'} = MediaWiki::API->new();
 		my $wiki_base_url = $address_params{'protocol'}.'://'.$address_params{'host'};
-		$self->{'mw_apiurl'} = $wiki_base_url.'/'.$address_params{'path'}.'/api.php';
+		$self->{'mw_apiurl'} = $wiki_base_url . '/' . $address_params{'path'} . '/api.php';
+		$self->{'mw_api'}->{'config'}->{'api_url'} = $self->{'mw_apiurl'};
 		if(    $self->{'cliparams'}->{'delete'} 
 				or $self->{'cliparams'}->{'upload'} 
 				or $self->{'cliparams'}->{'link-replacement'}
 				or $self->{'cliparams'}->{'search-sbl-attempts'}
 		){
-			$self->{'mw_api'}->{'config'}->{'api_url'} = $self->{'mw_apiurl'};
 			$self->{'mw_api'}->{'config'}->{'upload_url'} = $wiki_base_url.'/wiki/Special:Upload';
 			$self->{'mw_api'}->{'config'}->{'files_url'} = '';
 			$self->{'mw_api'}->login({
 				'lgname' => $self->{'mw_username'},
 				'lgpassword' => $wiki_password,
 				#'lgdomain' => ''
-			}) or die $self->{'mw_api'}->{'error'}->{'code'}.': '.$self->{'mw_api'}->{'error'}->{'details'};
+			}) or ($self->_handle_api_error and die);
 		}else{
 			unless(defined $self->{'mw_bot'}){
 				$self->msg(0, 'check upper/lower case. or maybe there\'s an expired cookie file. please delete \''. 
@@ -2003,11 +2166,7 @@ sub syntaxCheck{
 							text     => $$text,
 							bot      => 1,
 							summary  => "Bot: $summary",
-					}) or $self->msg(0,
-						$self->{'mw_api'}->{'error'}->{'code'} . ': ' . 
-						$self->{'mw_api'}->{'error'}->{'details'},
-						'error'
-					);
+					}) or $self->_handle_api_error();
 				}else{
 					$self->{'user_answer'} = '';
 				}
@@ -2031,7 +2190,7 @@ sub syntaxCheck{
 			my @text_lines = grep {s/^\s*(.*?)\s*$/$1/} split /\n/, $$text;
 			my @orig_text_lines = grep {s/^\s*(.*?)\s*$/$1/} split /\n/, $$orig_text;
 			my @lines_to_show = ();
-			while($diff=~/@@ -(\d+),(\d+) \+\d+,\d+ @@/g){
+			while($diff =~ /@@ -(\d+),(\d+) \+\d+,\d+ @@/g){
 				push @lines_to_show, [$1-1, $1+$2-2];
 			}
 			#print Dumper(\@lines_to_show);
@@ -2413,7 +2572,7 @@ sub syntaxCheck{
 		my $edit_filter_name = 'Bearbeitungsfilter';
 		my $lt_page    = 'Wikipedia:'.$edit_filter_name.'/latest topics';
 		# api.php?action=query&generator=allpages&gapnamespace=4&gapprefix=Bearbeitungsfilter/&gapfilterredir=nonredirects&gaplimit=500&prop=info|revisions&rvprop=content|timestamp
-		$self->{'mw_api'}->{config}->{api_url} = $self->{'mw_apiurl'};
+		#$self->{'mw_api'}->{config}->{api_url} = $self->{'mw_apiurl'}; TODO: this line can be deleted, right?
 		my $pages = [
 			sort {$b->{'revisions'}->[0]->{'timestamp'} cmp $a->{'revisions'}->[0]->{'timestamp'}}
 			@{$self->get_pages_by_prefix({
@@ -2631,9 +2790,8 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		# check, whether file exists already. If so, compare. don't upload, if same.
 		$self->msg(2, " downloading file if existant");
 		my $oldfile = $self->{'mw_api'}->download({'title' => 'File:'.$filename_dest});
-		if(not defined $oldfile or $self->{'mw_api'}->{error}->{code}!=0){
-			$self->msg(0, $self->{'mw_api'}->{error}->{code} . ': ' . 
-				$self->{'mw_api'}->{error}->{details});
+		if(not defined $oldfile or $self->{'mw_api'}->{'error'}->{'code'}!=0){
+			$self->_handle_api_error();
 			return 0;
 		}
 		$self->msg(3, " downloaded file (if existant)");
@@ -2651,7 +2809,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 						'data'    => $$data,
 						'summary' => $summary,
 						'title'   => $filename_dest,
-					}) or die $self->{'mw_api'}->{error}->{code} . ': ' . $self->{'mw_api'}->{error}->{details};
+					}) or ($self->_handle_api_error() and die);
 			}
 			return 1;
 		}else{
@@ -2951,10 +3109,11 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 	sub db_rc_monitoring{
 		my $self = shift;
 		my $last_check = 0;
-		my $continue_timestamp = undef;
+		#my $continue_timestamp = undef;
+		my $continue_timestamp = strftime("%Y%m%d%H%M%S", gmtime(time()-60*60*24*.05)); # e.g. '20150217170000'
 		my $camelbot = $self->{'camelbot'};
 		my $sleep_delay = 30; # seconds
-		while(1){
+		while(1){ # endless loop, break via ctrl-c
 			# wait for $sleep_delay seconds before sending a query to db again
 			if($last_check + $sleep_delay > time){
 				my $sleep_time = $sleep_delay + $last_check - time;
@@ -3067,6 +3226,7 @@ my $camelbot = CamelBot->new({
 	'simulation'  => $params->{'test'},
 	'showdiff'    => 0,
 	'verbosity'   => $params->{'verbose'},
+	'db_access'   => $params->{'db-access'},
 	'cliparams'   => $params,
 });
 
@@ -3091,6 +3251,17 @@ if($params->{'cat-change'}){
 
 if($params->{'delete'}){
 	$camelbot->delete_marked_pages();
+}
+
+if($params->{'diff-from'}){
+	my $diff_from = {};
+	if($params->{'diff-from'} =~ /^[0-9]+\z/){
+		$diff_from->{'revid'} = $params->{'diff-from'};
+	}else{
+		$diff_from->{'title'} = $params->{'diff-from'};
+	}
+	my $diff = $camelbot->get_diff($diff_from, $params->{'diff-to'});
+	#print Dumper $diff;
 }
 
 if(defined $params->{'download-by-prefix'}){
@@ -3180,7 +3351,7 @@ if(defined $params->{'parse'}){
 	# read wikitext
 	my $wikitext = slurp $filename;
 	# convert to html
-	$camelbot->{'mw_api'}->{config}->{api_url} = $camelbot->{'mw_apiurl'};
+	# $camelbot->{'mw_api'}->{config}->{api_url} = $camelbot->{'mw_apiurl'}; TODO: this line can be deleted, right?
 	my $html = $camelbot->parse_wikitext($wikitext);
 	my $html_cleaned = $camelbot->post_process_html($html);
 	$html_cleaned=~s/\n\K\n+//g;
@@ -3191,7 +3362,7 @@ if(defined $params->{'parse'}){
 }
 
 if($params->{'rc-monitoring'}){
-	$camelbot->{'mw_api'}->{config}->{api_url} = $camelbot->{'mw_apiurl'};
+	# $camelbot->{'mw_api'}->{config}->{api_url} = $camelbot->{'mw_apiurl'}; TODO: this line can be deleted, right?
 	if($params->{'rc-monitoring'} eq 'irc'){
 		$camelbot->update_edit_filter_index();
 		my $username = 'CamelBot';
@@ -3219,7 +3390,7 @@ if($params->{'rc-monitoring'}){
 }
 
 if(defined $params->{'save-as-html'}){
-	$camelbot->{'mw_api'}->{config}->{api_url} = $camelbot->{'mw_apiurl'};
+	# $camelbot->{'mw_api'}->{config}->{api_url} = $camelbot->{'mw_apiurl'}; TODO: this line can be deleted, right?
 	my ($html, $title, $headhtml) = $camelbot->parse_page($params->{'save-as-html'});
 	# set html title
 	$headhtml=~s/<title>\K[^<]+(?=<\/title>)/$title/;
@@ -3429,11 +3600,19 @@ general options:
                                 (status 200 or 301)
  -t, --test                    don't change anything, just print possible changes
 
-mediawiki/wikipedia options:
+mediawiki/wikipedia login:
+
+     --db-access=s             filename of file containing database access data, 
+                                i.e., host, port, user and password
+     --username=s              login as different user (default = shell login name)
+
+mediawiki/wikipedia commands:
 
      --cat-add                 add a given bunch of pages to a given category
  -c, --cat-change              replaces categories 
      --delete                  delete some pre-defined pages
+     --diff-from=s             revision id to get a diff from
+     --diff-to=s               revision id (or 'prev' or 'next') to get a diff to
      --download-by-prefix=s    download pages (and used images) with given prefix
      --irc                     short for --rc-monitoring=irc
  -l, --link-replacement        replaces links 
@@ -3453,7 +3632,6 @@ mediawiki/wikipedia options:
                                 e.g. 'regexp=evil-?domain\.;proj=enwiki;' or
                                 e.g. 'proj=enwiki;sbl=meta;'
                                 (syntax may change in future)
- -t, --test                    don't change anything, just print possible changes
      --update-editfilter-index update edit filter index (at w:de)
      --upload                  upload a file
                                iff this param is set, you should additionally set 
@@ -3463,7 +3641,6 @@ mediawiki/wikipedia options:
                                  (e.g. "robot cat with hat\\n\\n[[Category:Nonsense]]")
        --udest=s                destination filename (e.g. 'a_descriptive_name.txt')
      --usercontribs            fetch user contributions
-     --username=s              login as different user (default = shell login name)
 
 meta options:
 
@@ -3497,9 +3674,32 @@ add a given bunch of pages to a given category.
 
 replaces categories 
 
+=item B<--db-access=I<filename>>
+
+if you are lucky and have database access to the mediawiki db, then camelbot will 
+try to make use of this database. just provide the I<filename> (default = 
+'replica.my.cnf') of a file containing something like
+ user='your name'
+ password='your password'
+ port='e.g. 3306'
+ host='e.g. 127.0.0.1'
+
 =item B<--delete>
 
 delete some pre-defined pages
+
+=item B<--diff-from>=I<string>
+
+returns diff of two revisions of a wiki page to stdout. If I<string> is a number, 
+it's treated as a page revision. If it's not a number, it's treated as a page title
+and the newest revision is used.
+
+should be combined with B<--diff-to>=I<string>, where a second revision number or 
+'prev' (default) or 'next' can be given to choose a revision to diff to.
+
+=item B<--diff-to>=I<string>
+
+see B<--diff-from>
 
 =item B<--download-by-prefix>=I<string>
 
