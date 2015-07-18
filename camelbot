@@ -241,7 +241,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.31.20150707';
+$main::VERSION = '1.32.20150718';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -555,15 +555,15 @@ sub syntaxCheck{
 			$changes->{'double protocol'} = $self->test_and_replace($text, 
 				qr/(?:(?:http:|(?<=\[))\/\/)+(https?):?\/\/($self->{'re_url_rear'})/m, 
 				'"$1:\/\/$2"');
-			# === missing brackets ===
+			# === missing/too much brackets ===
 			# <ref>[http://www.example.org</ref>
-			$changes->{'missing right bracket'} = $self->test_and_replace($text, 
+			$changes->{'wrong left bracket'} = $self->test_and_replace($text, 
 				qr/(<ref>)\s*\[\s*(https?:\/\/$self->{'re_url_rear'})[\s.]*+(<\/ref>)/m, 
-				'"$1\x5b$2]$3"');
+				'"$1$2$3"'); # was '"$1\x5b$2]$3"' until 2015-07-18, but deleting of such brackets seems more convenient
 			# <ref>http://www.example.org]</ref>
-			$changes->{'missing left bracket'} = $self->test_and_replace($text, 
+			$changes->{'wrong right bracket'} = $self->test_and_replace($text, 
 				qr/(<ref>)\s*(https?:\/\/$self->{'re_url_rear'})\s*+]\s*(<\/ref>)/m, 
-				'"$1\x5b$2]$3"');
+				'"$1$2$3"'); # see above
 			# === checking of spelling/typography ===
 			$changes->{'abk..'} = $self->test_and_replace($text, 
 				qr/ (?:Chr|e\.(?: |&nbsp;)?V|ff|Jh|usw)\.\K\. /m, 
