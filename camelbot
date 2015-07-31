@@ -117,6 +117,9 @@ use POSIX qw/strftime/;       # format timestamp
 # sub get_user_contribs
 # 	get list of pages edited by user
 #
+# sub get_wikitable_ascii_col_widths
+# 	get col widths defined by ascii art
+#
 # sub _handle_api_error
 # 	just a centralized short version of mw api error handling
 #
@@ -241,7 +244,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.32.20150718';
+$main::VERSION = '1.33.20150731';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -1304,7 +1307,6 @@ sub syntaxCheck{
 		my $user    = $options->{'username'} // $options->{'usernameprefix'};
 		$self->msg(1, "searching for contributions of user: $user");
 		#my $ref = $self->{'mw_bot'}->contributions($options->{'username'}, 0, undef);
-		# $self->{'mw_api'}->{config}->{api_url} = $self->{'mw_apiurl'};  TODO: this line can be deleted, right?
 		my $query = {
 			'action'    => 'query',
 			'list'      => 'usercontribs', 
@@ -1336,6 +1338,35 @@ sub syntaxCheck{
 			}
 		}
 		return \%list_of_articles;
+	}
+
+	sub get_wikitable_ascii_col_widths{
+		my $self = shift;
+		my $row_array = shift;
+		my @counts;
+		# save length of cells with their frequency
+		for my $row(@$row_array){
+			my @row_cell_lengths = map {$_ = length($_)} split /(?:\|\||!!)/, $row;
+			for(my $i = 0; $i < @row_cell_lengths ; ++$i){
+				++$counts[$i]->{$row_cell_lengths[$i]};
+			}
+		}
+		#print Dumper \@counts;
+		# get size with max frequency
+		for my $count(@counts){
+			my $length = 0;
+			my $bak_count = 0;
+			while(my ($size, $num_occ) = each %$count){
+				if($num_occ > $bak_count){
+					$bak_count = $num_occ;
+					$length = $size;
+				}
+			}
+			$count = $length;
+		}
+		--$counts[0] if defined $counts[0]; # decrease, because of leading '|'
+		#print Dumper \@counts;
+		return \@counts;
 	}
 
 	sub _handle_api_error{
@@ -2075,27 +2106,19 @@ sub syntaxCheck{
 		}
 		my $text_bak = $text;
 		# convert table to wikitext string
-		my $tablestyle_default = {
-			'table'  => 'class="wikitable sortable"',
-			#'header' => 'class="hintergrundfarbe6"',
-		};
-		my $tablestyle;
+		my $full_auto = 1;
 		if($text eq ''){
-			for(@$tables){
-				%$tablestyle = %$tablestyle_default;
-				$tablestyle->{'table'} = 'class="'.$_->{'class'}.'"' if exists $_->{'class'};
-				my $wikitable = $self->table2wikitext($_, $tablestyle, 1);
-				$text .= "== ".$_->{'section'}." ==\n" if defined $_->{'section'};
+			for my $table(@$tables){
+				my $wikitable = $self->table2wikitext($table, $full_auto);
+				if(defined $table->{'section'}){
+					$text .= "== " . $table->{'section'} . " ==\n";
+				}
 				$text .= $wikitable;
 			}
 		}else{
 			# find place to insert table and replace table
 			for my $table(@$tables){
-				%$tablestyle = %$tablestyle_default;
-				if(exists $table->{'class'}){
-					$tablestyle->{'table'} = 'class="' . $table->{'class'} . '"';
-				}
-				my $wikitable = $self->table2wikitext($table, $tablestyle, 1);
+				my $wikitable = $self->table2wikitext($table, $full_auto);
 				if(defined $table->{'section'}){
 					my $section = $table->{'section'};
 					my $re_section_heading = 
@@ -2381,26 +2404,65 @@ sub syntaxCheck{
 	sub table2wikitext{
 		my $self      = shift;
 		my $table     = shift;
-		my $style     = shift;
-		my $full_auto = shift // 1;
-		$style->{'table'} = '' if not defined $style->{'table'};
+		my $full_auto = shift // 1; # full auto message
+		my $only_one_cell_per_line = shift // 1;
+		my $col_widths = shift; # til now: ignored if $only_one_cell_per_line
+		my $style = $table->{'style'} // {};
+		$style->{'table'} = '' unless defined $style->{'table'};
+		my @col_widths_cumsum;
+		if(defined $col_widths){
+			$col_widths_cumsum[0] = $col_widths->[0];
+			for(my $i = 1; $i < @$col_widths; ++$i){
+				$col_widths_cumsum[$i] = $col_widths_cumsum[$i-1] + $col_widths->[$i];
+			}
+		}
 		my $wikitable = '';
 		if($full_auto){
 			$wikitable .= "<!-- this table is generated automatically. " . 
 				"any manual modifications will be deleted on next update. -->\n";
 		}
-		$wikitable .= "{| ".$style->{'table'}."\n";
-		my $row = 0;
-		if(exists $table->{header} and $table->{'header'}){
-			$wikitable .= '|- '.$style->{'header'}."\n" if defined $style->{'header'};
-			$wikitable .= '! '.$_."\n" for @{$table->{'body'}[$row]};
-			++$row;
-		}
-		for(;$row<@{$table->{'body'}}; ++$row){
-			$wikitable .= "|-\n";
-			for(my $col = 0;$col<@{$table->{'body'}[$row]}; ++$col){
-				$wikitable .= '| '.$table->{'body'}[$row][$col]."\n";
+		$wikitable .= "{| " . $style->{'table'} . "\n";
+		# anonymous function for re-use with header and body
+		my $gen_row = sub {
+			my $sep               = shift;
+			my $only_one_cell_per_line = shift;
+			my $col_widths        = shift;
+			my $table_row         = shift;
+			my $col_widths_cumsum = shift;
+			my $wikitable = '';
+			if($only_one_cell_per_line){
+				$wikitable .= "$sep $_\n" for @$table_row;
+			}else{
+				if($col_widths){
+					$wikitable .= "$sep ";
+					my $wikirow = '';
+					for(my $col = 0; $col < @$table_row; ++$col){
+						my $cell = $table_row->[$col];
+						$wikirow .= " $sep$sep " if $col > 0; 
+						$wikirow .= $cell;
+						my $num_spaces = $col_widths_cumsum->[$col] 
+							- 2        # spaces at begin and end
+							- length($wikirow) 
+							+ 2 * $col;  # '!!' or '||' respectively
+						$wikirow .= ' ' x $num_spaces if $num_spaces > 0;
+					}
+					$wikitable .= $wikirow . "\n";
+				}else{
+					$wikitable .= "$sep " . join(" $sep$sep ", @$table_row) . "\n";
+				}
 			}
+			return $wikitable;
+		};
+		if(defined $table->{'header'} and @{$table->{'header'}} > 0){
+			my $table_row = $table->{'header'};
+			$wikitable .= '|- ' . $style->{'header'} . "\n" if defined $style->{'header'};
+			$wikitable .= $gen_row->('!', $only_one_cell_per_line, $col_widths, 
+				$table_row, \@col_widths_cumsum);
+		}
+		for my $table_row(@{$table->{'body'}}){
+			$wikitable .= "|-\n";
+			$wikitable .= $gen_row->('|', $only_one_cell_per_line, $col_widths, 
+				$table_row, \@col_widths_cumsum);
 		}
 		$wikitable .= "|}\n";
 		return $wikitable;
@@ -2572,7 +2634,6 @@ sub syntaxCheck{
 		my $edit_filter_name = 'Bearbeitungsfilter';
 		my $lt_page    = 'Wikipedia:'.$edit_filter_name.'/latest topics';
 		# api.php?action=query&generator=allpages&gapnamespace=4&gapprefix=Bearbeitungsfilter/&gapfilterredir=nonredirects&gaplimit=500&prop=info|revisions&rvprop=content|timestamp
-		#$self->{'mw_api'}->{config}->{api_url} = $self->{'mw_apiurl'}; TODO: this line can be deleted, right?
 		my $pages = [
 			sort {$b->{'revisions'}->[0]->{'timestamp'} cmp $a->{'revisions'}->[0]->{'timestamp'}}
 			@{$self->get_pages_by_prefix({
@@ -2584,17 +2645,17 @@ sub syntaxCheck{
 		# last change of latest_topics
 		my $lt_last_change = 
 			$self->get_page_info($lt_page)->{$lt_page}->{'touched'};
-		my $i = 0;
 		my $tables = [{
-			'header' => 1,
-			'body' => [['Regel', "letzte Seiten\xe4nderung", 'Thread', 'letzter Autor']],
+			'style'  => {'table' => 'class="wikitable sortable"'},
+			'header' => ['Regel', "letzte Seiten\xe4nderung", 'Thread', 'letzter Autor'],
+			'body'   => [],
 		}];
 		my %new_topics;
+		my $i = 0;
 		for my $page(@$pages){
 			#$self->msg(2, " $page->{'revisions'}->[0]->{'timestamp'}: $page->{title}");
 			my $npost = $self->newest_post_info($page->{'revisions'}->[0]->{'*'});
 			next unless defined $npost->{'thread'};
-			++$i;
 			# date of last change of rule
 			my $date_of_last_change = 
 				'{{#timel:Y-m-d H:i:s|'.$page->{'revisions'}->[0]->{'timestamp'}.'}}';
@@ -2627,8 +2688,9 @@ sub syntaxCheck{
 			last if $page->{'revisions'}->[0]->{'timestamp'} lt 
 				$self->get_date_iso(time-60*60*24*$max_num_days_age) 
 				and $i >= $max_num_talk_pages;
+			++$i;
 		}
-		#print table2wikitext($tables->[0], {'table' => 'class="wikitable sortable"'}, 1);
+		#print table2wikitext($tables->[0], $full_auto);
 		if(keys %new_topics > 0){
 			my $filter_descriptions = $self->get_abuse_filter_info();
 			# build summary
@@ -2643,7 +2705,7 @@ sub syntaxCheck{
 					/^[0-9]+$/ ? "#$_" : $_;
 				} # add '#' on rule numbers
 				sort {
-					# todo: there's some bug inhere. strings are recognized as numbers?
+					# TODO: there's some bug inhere. strings are recognized as numbers?
 					my $result;
 					if($a =~ /^[0-9]+$/ and $b =~ /^[0-9]+$/){ 
 						# numerical sorting on rule numbers
@@ -2664,6 +2726,7 @@ sub syntaxCheck{
 			# now update page
 			$self->rebuild_table($lt_page, $tables, $summary);
 		}
+		return 1;
 	}
 
 	sub update_maintenance_lists{
@@ -2712,16 +2775,13 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 					my $intro = $intros{$mt_type};
 					my $outro = "\n\n[[Kategorie:Wikipedia:Wartungskategorie|$mt_type]]";
 					my $wikitable;
-					my $tablestyle = {
-						'table'  => 'class="wikitable sortable"',
-					};
 					if($ml_text =~ /^(.*\n== [lL]iste? ==\n+.*?)(\{\|.*?\|\})\n(.*)$/s){ # extract (save) old intro
 						$intro = $1;
 						$wikitable = $2;
 						$outro = $3;
 					}else{
 						$self->msg(1, 'could not fetch table. resetting page.', 'notice');
-						$wikitable = '{| '.$tablestyle->{'table'}."\n".
+						$wikitable = '{| class="wikitable sortable"' . "\n".
 							"! page !! date of detection by CamelBot\n".
 							'|}';
 					}
@@ -2759,11 +2819,9 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 					for my $entry(@{$table->{'body'}}){
 						$maintenance_lists->{$mt_type}->{substr($entry->[0], 2, -2)} = 1;
 					}
-					unshift @{$table->{'body'}}, [@{$table->{'header'}}];
-					$table->{'header'} = 1;
-					my $full_auto = 0;
+					my $full_auto = 1;
 					# convert array to wikitable
-					$wikitable = $self->table2wikitext($table, $tablestyle, $full_auto);
+					$wikitable = $self->table2wikitext($table, !$full_auto);
 					# rebuild page
 					$ml_text = $intro . $wikitable . $outro;
 					$self->time_management();
@@ -2847,14 +2905,15 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		my $self = shift;
 		my $wikitable = shift;
 		$$wikitable =~/^\{\|   # begin of table
-			(?-s:.*)\n+          # class, id, ...
+			\x20*((?-s:.*))\n+   # class, id, ...
 			((?:!\s*[^\n]*\n+)*) # table header
 			(.*)                 # table body
-			(?<=\n)\|\}$         # end of table
+			(?<=\n)\|\}\n?$      # end of table
 		/sx;
 		my $table = {
-			'header' => $self->wikitableHeader2array($1),
-			'body' => $2,
+			'style' => {'table' => $1},
+			'header' => $self->wikitableHeader2array($2),
+			'body' => $3,
 		};
 		# decomposing wiki-table to array
 		$table->{'body'} = $self->table_body2array(\$table->{'body'});
@@ -3351,7 +3410,6 @@ if(defined $params->{'parse'}){
 	# read wikitext
 	my $wikitext = slurp $filename;
 	# convert to html
-	# $camelbot->{'mw_api'}->{config}->{api_url} = $camelbot->{'mw_apiurl'}; TODO: this line can be deleted, right?
 	my $html = $camelbot->parse_wikitext($wikitext);
 	my $html_cleaned = $camelbot->post_process_html($html);
 	$html_cleaned=~s/\n\K\n+//g;
@@ -3362,7 +3420,6 @@ if(defined $params->{'parse'}){
 }
 
 if($params->{'rc-monitoring'}){
-	# $camelbot->{'mw_api'}->{config}->{api_url} = $camelbot->{'mw_apiurl'}; TODO: this line can be deleted, right?
 	if($params->{'rc-monitoring'} eq 'irc'){
 		$camelbot->update_edit_filter_index();
 		my $username = 'CamelBot';
@@ -3390,7 +3447,6 @@ if($params->{'rc-monitoring'}){
 }
 
 if(defined $params->{'save-as-html'}){
-	# $camelbot->{'mw_api'}->{config}->{api_url} = $camelbot->{'mw_apiurl'}; TODO: this line can be deleted, right?
 	my ($html, $title, $headhtml) = $camelbot->parse_page($params->{'save-as-html'});
 	# set html title
 	$headhtml=~s/<title>\K[^<]+(?=<\/title>)/$title/;
@@ -3535,14 +3591,14 @@ if($params->{'update-editfilter-index'}){
 if($params->{'update-table'}){
 	# get information somehow
 	# write all information to a table structure
-	my $tables;
-	# table header
-	$tables->[0]{'header'} = 1;
-	$tables->[0]{'section'} = 'somesection';
-	$tables->[0]{'body'}[0] = ['row0', 'row1', 'row2'];
-	$tables->[0]{'class'} = 'wikitable';
+	my $tables = [{
+		'header'  => ['row0', 'row1', 'row2'],
+		'section' => 'somesection',
+		'body'    => [],
+		'style'   => {'table' => 'class="wikitable"'},
+	}];
 	# table body
-	my $col = 1;
+	my $col = 0;
 	#for(sort keys %packages){
 	#	$tables->[0]{'body'}[$col][0] = '[['.$packages{$_}{'name'}.']]';
 	#	$tables->[0]{'body'}[$col][1] = $packages{$_}{'archs'};
@@ -3862,3 +3918,4 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 originally written by seth (see https://github.com/wp-seth/camelbot)
 
 =cut
+
