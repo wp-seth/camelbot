@@ -32,6 +32,9 @@ use POSIX qw/strftime/;       # format timestamp
 # sub api_simple
 # 	use MediaWiki::API and catch errors
 #
+# sub archive_ext_links
+#		find all links in given text ref and call saving procedure on archive.org	
+#
 # sub cat_add
 # 	adds a given bunch of pages to a given category by adding [[category:new]] at 
 # 	the end
@@ -59,12 +62,25 @@ use POSIX qw/strftime/;       # format timestamp
 # sub _db_simplequery
 # 	wrapper for simple db queries
 #
+# sub db_extlinks_monitoring
+# 	use db to monitor external links in an endless loop
+#
+# sub db_fetch_externallinks
+# 	use db to get external links for a given range of el_ids of el-table
+#
 # sub db_fetch_recentchanges
 # 	use db to get recent changes for a given time period
 #
 # sub db_fetch_sbl_log
 # 	use db to get all entries of the sbl log of blocked edits; optional 
 # 	(but recommended) given a regexp for a searched url
+#
+# sub db_rc_monitoring
+# 	use db to monitor recent changes in an endless loop
+#
+# sub db_table2array_of_hash
+# 	converts a db_table (fetchall_arrayref) to a array where each element is a 
+# 	hashref with {'rowname0'=>'content', 'rowname1'=>'content', ...}
 #
 # sub delete_marked_pages
 # 	delete pages that are in a special category
@@ -86,6 +102,13 @@ use POSIX qw/strftime/;       # format timestamp
 #
 # sub get_diff
 # 	a more detailed version of MediaWiki::Bot::diff
+#
+# sub get_extlinks_via_db
+#		get ref to an array of hashes, where each hash represents an external link and 
+#		one page where it's used
+#
+# sub get_rc_via_db
+#		get ref to an array of hashes, where each hash represents a recent change
 #
 # sub get_namespace_id
 # 	return namespace id of a given page
@@ -119,6 +142,13 @@ use POSIX qw/strftime/;       # format timestamp
 #
 # sub get_wikitable_ascii_col_widths
 # 	get col widths defined by ascii art
+#
+# sub handle_extlinks
+#		given a bunch of external links, this function calls functions like 
+#		archive_ext_links
+#
+# sub handle_rc_pages
+#		major function for andling of recent changes of short-term and mid-term
 #
 # sub _handle_api_error
 # 	just a centralized short version of mw api error handling
@@ -195,6 +225,9 @@ use POSIX qw/strftime/;       # format timestamp
 # sub title2filename
 # 	converts a page title to a filename
 #
+# sub title2url
+# 	convert article name to url
+#
 # sub title2url_part
 # 	convert article name to part of url with article name
 #
@@ -244,7 +277,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.33.20150731';
+$main::VERSION = '1.35.20151123';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -275,6 +308,7 @@ $SIG{__WARN__} = \&_warn;
 
 sub syntaxCheck{
 	my %params = ( # default cli params
+		'archive-ext-links'  => undef, # save external links from id till id, using db
 		'cat-add'            => 0,     # add pages to a category
 		'cat-change'         => 0,     # cat change
 		'db-access'          => 'replica.my.cnf', # filename with database access data 
@@ -305,6 +339,7 @@ sub syntaxCheck{
 	);
 	pod2usage(-exitval => 2) if @ARGV == 0;
 	GetOptions(\%params,
+		'archive-ext-links=s',
 		'cat-add',
 		'cat-change|c',
 		'db-access=s',
@@ -467,6 +502,25 @@ sub syntaxCheck{
 		}
 		$self->msg(3, Dumper($api_result)) if defined $api_result;
 		return $api_result;
+	}
+
+	sub archive_ext_links{
+		my $self = shift;
+		my $urls = shift;
+		my $wp_page = shift // '';
+		my $wp_page_url = $self->title2url($wp_page);
+		# TODO: 1. fill in params; 2. test
+		my $email_address = '';
+		map {
+			my $encoded_url = uri_escape($_);
+			my $url = 'https://web.archive.org/save/' . $_;
+			#$self->msg(2, $url);
+			$self->check_external_link(\'', \$url);
+			#$url = "http://www.webcitation.org/archive?email=$email_address&source=$wp_page_url&url=$encoded_url";
+			#$self->msg(2, $url);
+			#$self->check_external_link(\'', \$url);
+		} grep {!/^https?:\/\/(?:[a-z]+\.)?(?:archive|webcitation)\.org/} @$urls;
+		return 1;
 	}
 
 	sub cat_add{
@@ -780,7 +834,7 @@ sub syntaxCheck{
 			#$db_query->[0] =~ s/\s+/ /g;
 			$db_query->[0] =~ s/^\s+|\s+\z//g;
 			$db_query = sprintf $db_query->[0], map {
-				/^-?(?:\d*\.\d+|\d+\.?)\z/ ? $_ :
+				(defined $_ and /^-?(?:\d*\.\d+|\d+\.?)\z/) ? $_ :
 				$self->{'db'}->{'handle'}->quote($_); #(not defined $_) ? 'NULL'  (will be done by quote, so ensure, using '%s' even on numbers)
 			} @$db_query[1..@$db_query-1];
 		}
@@ -803,6 +857,26 @@ sub syntaxCheck{
 	#	}
 	#}
 
+	sub db_fetch_externallinks{
+		my $self    = shift;
+		my $from_id = shift // 1;
+		my $to_id   = shift;
+		my $return_header = 1;
+		my $db_table;
+		my $sql_max_id = defined $to_id ? 'AND `el_id`<=%s' : '';
+		# TODO: what is the right name for page.name?
+		$db_table = $self->_db_simplequery(['
+				SELECT `el_id`, `el_from`, `el_to`, `p`.`page_title` AS `page`
+				FROM `externallinks`
+				LEFT JOIN `page` AS `p`
+					ON (`p`.`page_id`=`externallinks`.`el_from`)
+				WHERE `el_id`>=%s ' . $sql_max_id . '
+				ORDER BY `el_id`
+				LIMIT 1000
+		', $from_id, $to_id], $return_header);
+		return $self->db_table2array_of_hash($db_table);
+	}
+
 	sub db_fetch_recentchanges{
 		my $self = shift;
 		my $timestamp_begin = shift; # format yyyymmddhhmmss
@@ -811,45 +885,30 @@ sub syntaxCheck{
 			# default = last 12 hours
 			$timestamp_begin = $self->get_time_iso(time()-60*60*12);
 		}
+		my $sql_max_ts = defined $timestamp_end ? 'AND `rc_timestamp`<=%s' : '';
 		my $return_header = 1;
 		my $db_table;
-		my $rows = [
-			'rc_timestamp', 
-			'rc_user_text', 
-			'rc_namespace', 
-			'rc_title', 
-			'rc_comment', 
-			'rc_this_oldid', 
-			'rc_last_oldid', 
-			'rc_old_len', 
-			'rc_new_len',
-		];
-		$rows = join ', ', map {$_ = '`'.$_.'`'} @$rows;
-		if(defined $timestamp_end){
-			$db_table = $self->_db_simplequery(['
-					SELECT '.$rows.'
-					FROM `recentchanges`
-					WHERE `rc_timestamp`>=%s
-						AND `rc_timestamp`<=%s
-						AND (`rc_namespace`=0
-							OR `rc_namespace`=4
-						)
-						AND `rc_log_type` IS NULL
-					ORDER BY `rc_timestamp`
-			', $timestamp_begin, $timestamp_end], !$return_header);
-		}else{
-			$db_table = $self->_db_simplequery(['
-					SELECT '.$rows.'
-					FROM `recentchanges`
-					WHERE `rc_timestamp`>=%s
-						AND (`rc_namespace`=0
-							OR `rc_namespace`=4
-						)
-						AND `rc_log_type` IS NULL
-					ORDER BY `rc_timestamp`
-			', $timestamp_begin], !$return_header);
-		}
-		return $db_table;
+		$db_table = $self->_db_simplequery(['
+				SELECT
+					`rc_timestamp` AS `timestamp`, 
+					`rc_user_text` AS `user`, 
+					`rc_namespace` AS `ns_id`, 
+					`rc_title` AS `page`, 
+					`rc_comment` AS `summary`, ' .
+					#`rc_this_oldid`,
+					#`rc_last_oldid`,
+					'`rc_old_len`,
+					`rc_new_len`
+				FROM `recentchanges`
+				WHERE `rc_timestamp`>=%s
+					' . $sql_max_ts . '
+					AND (`rc_namespace`=0
+						OR `rc_namespace`=4
+					)
+					AND `rc_log_type` IS NULL
+				ORDER BY `rc_timestamp`
+		', $timestamp_begin, $timestamp_end], $return_header);
+		return $self->db_table2array_of_hash($db_table);
 	}
 
 	sub db_fetch_sbl_log{
@@ -877,6 +936,21 @@ sub syntaxCheck{
 				ORDER BY `log_timestamp`
 		', $url_re], !$return_header, $proj);
 		return $db_table;
+	}
+
+	sub db_table2array_of_hash{
+		my $self      = shift;
+		my $db_table  = shift;
+		my $db_header = shift @$db_table;
+		my $db_hashtable = [];
+		for my $r(@$db_table){
+			push @$db_hashtable, {
+				map {
+					($db_header->[$_] => $r->[$_])
+				} 0..@$db_header-1
+			};
+		}
+		return $db_hashtable;
 	}
 
 	sub delete_marked_pages{
@@ -1444,7 +1518,7 @@ sub syntaxCheck{
 		my $old_page_0 = {};           # list of edited pages in ns==0
 		my $old_page_1 = {};           # list of edited pages in ns!=0
 		# some regexp vars should make source more readable 
-		my $re_url = $re_prot_part.$re_url_part.$self->{'re_url_class'};
+		my $re_url = $re_prot_part . $re_url_part . $self->{'re_url_class'};
 		my $re_descr_class = qr/[^\]\x00-\x08\x0a-\x1F]/;
 		my $re_ref_tag_name = qr/<ref [^>]*name\s*=\s*['"]?([^>]*?)['"]?>/;
 		my $re_ref_inner_part = qr/(?s:(?!<ref)(?!<\/ref>).)+?$re_url_part.*?<\/ref>/;
@@ -2332,6 +2406,10 @@ sub syntaxCheck{
 				# search current project for given regexp
 				$results{$params->{'proj'}} = $self->search_sbl_blocked_log(
 						qr/$params->{'regexp'}/);
+			}elsif(grep {$_ eq $params->{'proj'}} @large_projects){
+				# search current project for given regexp
+				$results{$params->{'proj'}} = $self->search_sbl_blocked_log(
+						qr/$params->{'regexp'}/, $params->{'proj'});
 			}else{
 				$self->msg(0, 'not implemented yet', 'error');
 				#$results{$params->{'proj'}} = $self->search_sbl_blocked_log(
@@ -2618,6 +2696,17 @@ sub syntaxCheck{
 		return $title;
 	}
 
+	sub title2url{
+		my $self  = shift;
+		my $title = shift;
+		utf8::encode($title);
+		$title =~s/ /_/g;
+		my $url = $self->{'mw_apiurl'};
+		$url =~ s/api\.php$/index.php?title=/;
+		$url .= uri_escape($title);
+		return $url;
+	}
+
 	sub title2url_part{
 		my $self = shift;
 		my $title = shift;
@@ -2629,7 +2718,7 @@ sub syntaxCheck{
 	sub update_edit_filter_index{
 		my $self = shift;
 		# first get recent changes
-		my $max_num_talk_pages = 25;
+		my $max_num_talk_pages = 40;
 		my $max_num_days_age = 5;
 		my $edit_filter_name = 'Bearbeitungsfilter';
 		my $lt_page    = 'Wikipedia:'.$edit_filter_name.'/latest topics';
@@ -2943,6 +3032,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 	package CamelBotRC;
 	use POSIX qw/strftime/;     # format timestamp
 	use Data::Dumper;           # for debugging purposes
+	use File::Slurp qw(write_file); # read/write files
 	use Time::Local;            # timegm
 	$| = 1; # deactivate buffering, so flush all the time
 
@@ -2959,6 +3049,8 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			'delay_short'          => 10,    # seconds
 			'short_max_age'        => 60*60*3, # seconds
 			'start_ts'             => time,  # only for debugging purposes
+			'last_ext_links'       => [],    # remember last external links to avoid some redundancy
+			'max_ext_links'        => 1000,  # max length of list 'last_ext_links' 
 			're_namespaces'        => (join '|', grep {$_ ne ''} # get all namespaces!=0
 				values {$camelbot->{'mw_bot'}->get_namespace_names()}),
 		}, $class;
@@ -2971,17 +3063,30 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		return $self;
 	}
 
+	sub get_extlinks_via_db{
+		my $self    = shift;
+		my $from_id = shift;
+		my $to_id   = shift;
+		my $extlinks = $self->{'camelbot'}->db_fetch_externallinks($from_id, $to_id);
+		if(defined $extlinks){
+			for my $dataset(@$extlinks){
+				$dataset->{'page'} =~ s/_/ /g;
+			}
+			if($self->{'camelbot'}{'verbosity'} >= 2 or @$extlinks > 50){
+				$self->{'camelbot'}->msg(1, 'got ' . (0 + @$extlinks) . ' entries.');
+			}
+		}
+		return $extlinks;
+	}
+
 	sub get_rc_via_db{
 		my $self = shift;
 		my $camelbot = $self->{'camelbot'};
 		my $timestamp_begin = shift // $camelbot->get_time_iso(time()-60*60*12);
-		my $table = $self->{'camelbot'}->db_fetch_recentchanges($timestamp_begin);
-		my $rc_pages = [];
-		return undef unless defined $table;
-		for my $dataset(@$table){
-			my %rc_msg;
-			$rc_msg{'timestamp'} = $dataset->[0];
-			next unless $rc_msg{'timestamp'} =~/^
+		my $rc_pages = $self->{'camelbot'}->db_fetch_recentchanges($timestamp_begin);
+		return undef unless defined $rc_pages;
+		for my $dataset(@$rc_pages){
+			next unless $dataset->{'timestamp'} =~/^
 				(?<year>[0-9]{4})
 				(?<month>[0-9]{2})
 				(?<mday>[0-9]{2})
@@ -2991,25 +3096,51 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 				$/x;
 			my $timestamp_unix = timegm(
 				$+{'sec'}, $+{'min'}, $+{'hour'}, $+{'mday'}, $+{'month'}-1, $+{'year'});
-			#$self->{'rc_pages_midterm'}->{$dataset->[2]} = $timestamp_unix;
-			#$self->{'rc_pages_shortterm'}->{$dataset->[2]} = $timestamp_unix;
-			$rc_msg{'timestamp_unix'} = $timestamp_unix;
-			$rc_msg{'user'}      = $dataset->[1];
-			$rc_msg{'ns_id'}     = $dataset->[2];
-			$rc_msg{'page'}      = $dataset->[3];
-			$rc_msg{'page'} =~ s/_/ /g;
-			$rc_msg{'summary'}   = $dataset->[4];
-			$rc_msg{'page_with_ns'} = $rc_msg{'ns_id'} == 0 ? $rc_msg{'page'} : 
-				$camelbot->convert_ns($rc_msg{'ns_id'}) . ':' . $rc_msg{'page'};
-			#$rc_msg{'flags'}     = $dataset->[];
-			#$rc_msg{'url'}       = $dataset->[];
-			$rc_msg{'diffbytes'} = $dataset->[8] - $dataset->[7];
-			push @$rc_pages, \%rc_msg;
+			#$self->{'rc_pages_midterm'}->{$dataset->{'ns_id'}} = $timestamp_unix;
+			#$self->{'rc_pages_shortterm'}->{$dataset->{'ns_id'}} = $timestamp_unix;
+			$dataset->{'timestamp_unix'} = $timestamp_unix;
+			$dataset->{'page'} =~ s/_/ /g;
+			$dataset->{'page_with_ns'} = $dataset->{'ns_id'} == 0 ? $dataset->{'page'} : 
+				$camelbot->convert_ns($dataset->{'ns_id'}) . ':' . $dataset->{'page'};
+			#$dataset->{'flags'}     = $dataset->{''};
+			#$dataset->{'url'}       = $dataset->{''};
+			$dataset->{'diffbytes'} = $dataset->{'rc_new_len'} - $dataset->{'rc_old_len'};
+			#delete $dataset->{'rc_this_oldid'};
+			#delete $dataset->{'rc_last_oldid'};
+			delete $dataset->{'rc_old_len'};
+			delete $dataset->{'rc_new_len'};
 		}
-		if($camelbot->{'verbosity'} >= 2 or @$table > 50){
-			$camelbot->msg(1, 'got '.(0+@$table).' entries.');
+		if($camelbot->{'verbosity'} >= 2 or @$rc_pages > 50){
+			$camelbot->msg(1, 'got '.(0+@$rc_pages).' entries.');
 		}
 		return $rc_pages;
+	}
+
+	sub handle_extlinks{
+		my $self     = shift;
+		my $extlinks = shift;
+		for my $extlink(@$extlinks){
+			$extlink->{'el_to'} =~ s/^\/\//https:\/\//;
+			if($extlink->{'el_to'} !~ /
+				https?:\/\/
+				(?:[a-zA-Z0-9_-]+\.)?
+				(?:wiki(?:books|data|[mp]edia)|wmflabs)
+				\.org(?![^\/])/x
+			){
+				# check whether this link has been treated recently
+				unless(grep {$_ eq $extlink->{'el_to'}} @{$self->{'last_ext_links'}}){
+					# if not, then add link to list of recent ext. links
+					push @{$self->{'last_ext_links'}}, $extlink->{'el_to'};
+					if(@{$self->{'last_ext_links'}} > $self->{'max_ext_links'}){
+						shift @{$self->{'last_ext_links'}};
+					}
+					$self->{'camelbot'}->archive_ext_links(
+						[$extlink->{'el_to'}], $extlink->{'page'}
+					);
+				}
+			}
+		}
+		return 1;
 	}
 
 	sub handle_rc_pages{
@@ -3026,8 +3157,10 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			$self->{'rc_pages_shortterm'}->{$a} <=> $self->{'rc_pages_shortterm'}->{$b}
 			} keys %{$self->{'rc_pages_shortterm'}};
 		if(@loop_array > 0){
+			# right trim array
 			splice @loop_array, $max_pages_per_call if @loop_array > $max_pages_per_call;
 			my @updList_shortterm;
+			# just for debugging/info output
 			my $oldest_date = $camelbot->get_time_iso_($self->{'rc_pages_shortterm'}->{$loop_array[0]});
 			my $newest_date = $camelbot->get_time_iso_($self->{'rc_pages_shortterm'}->{$loop_array[-1]});
 			for my $title(@loop_array){
@@ -3089,6 +3222,11 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 				my $text = $camelbot->{'mw_bot'}->get_text($page);
 				if(defined $text and $camelbot->is_allowed(\$text, $page)){
 					my $text_bak = $text;
+					# TODO: test this
+					## find all external links and push to web-archive
+					## find links
+					#my @urls = ($$text =~ /https?:\/\/$self->{'re_url_rear'}/g);
+					#$self->archive_ext_links(\@urls, $page);
 					my $changes = $camelbot->cleanup_wiki_page(\$text, $page);
 					if($text_bak ne $text){
 						my $summary = 'kleinere korrekturen ('.
@@ -3108,6 +3246,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 				$camelbot->msg(2, "end of mid term checks of $numArticles articles.");
 			}
 		}
+		return 1;
 	}
 
 	sub put_new_rc{
@@ -3163,6 +3302,53 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		if($update{'editfilter'}){
 			$camelbot->update_edit_filter_index();
 		}
+		return 1;
+	}
+
+	sub db_extlinks_monitoring{
+		my $self    = shift;
+		my $from_id = shift // 1;
+		my $to_id   = shift;
+		my $file_of_state = shift // 'temp_' . time . rand . '.tmp';
+		my $last_check = 0;
+		my $camelbot = $self->{'camelbot'};
+		$camelbot->msg(2, 'to_id = ' . (defined $to_id ? $to_id: 'undef'));
+		$camelbot->msg(2, "file_of_state = $file_of_state");
+		my $sleep_delay = 30; # seconds
+		while(not defined $to_id or $to_id >= $from_id){ # endless loop, break via ctrl-c
+			# wait for $sleep_delay seconds before sending a query to db again
+			if($last_check + $sleep_delay > time){
+				my $sleep_time = $sleep_delay + $last_check - time;
+				$camelbot->msg(2, "sleep $sleep_time seconds");
+				sleep($sleep_time);
+			}
+			$last_check = time;
+			$camelbot->msg(2, 'get new external links from db');
+			my $new_extlinks = $self->get_extlinks_via_db($from_id, $to_id);
+			# delete multiple entries of same page
+			$camelbot->msg(2, 'delete multiple entries');
+			my %dbl_counter;
+			$new_extlinks = [reverse
+				grep {
+					$dbl_counter{$_->{'el_to'}} = (exists $dbl_counter{$_->{'el_to'}}) ? 0 : 1;
+					$dbl_counter{$_->{'el_to'}};
+				} sort {$b->{'el_id'} <=> $a->{'el_id'}} @$new_extlinks
+			];
+			if(@$new_extlinks > 0){
+				$from_id = $new_extlinks->[-1]->{'el_id'};
+				$camelbot->msg(1, 'last from_id: ' . $from_id);
+				++$from_id;
+				$camelbot->msg(1, 'got ' . (0 + @$new_extlinks) . ' new external links');
+				$self->handle_extlinks($new_extlinks);
+				# TODO: update file_of_state
+				write_file($file_of_state, {binmode => ':utf8'}, 
+					'continue_from=' . ($from_id + 1) . ';' . 
+					'continue_to=' . ($to_id // ''));
+				$sleep_delay = 1; 
+			}else{
+				$sleep_delay = 55; 
+			}
+		}
 	}
 
 	sub db_rc_monitoring{
@@ -3194,6 +3380,8 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			if(@$new_rc_pages > 0){
 				$continue_timestamp = $new_rc_pages->[-1]->{'timestamp'};
 				$camelbot->msg(2, 'last timestamp: ' . $camelbot->get_time_iso_($continue_timestamp));
+				# delete all entries of newest timestamp, because they will be re-fetched 
+				# in next step along with others (that maybe of the same timestamp)
 				while(@$new_rc_pages > 0 
 						and $new_rc_pages->[-1]->{'timestamp'} eq $continue_timestamp){
 					pop @$new_rc_pages;
@@ -3294,6 +3482,29 @@ my $camelbot = CamelBot->new({
 #my $changes = $camelbot->cleanup_wiki_page(\$text, 'moep');
 #print Dumper $changes;
 #exit 1;
+
+if($params->{'archive-ext-links'}){
+	if($params->{'archive-ext-links'} =~ /\b(?:from|to)_id\s*=\s*[0-9]|\bfile\s*=/){
+		my ($from_id, $to_id, $file);
+		$from_id = $1 if $params->{'archive-ext-links'} =~ /\bfrom_id\s*=\s*([0-9]*)/;
+		$to_id = $1 if $params->{'archive-ext-links'} =~ /\bto_id\s*=\s*([0-9]*)/;
+		$file = $1 if $params->{'archive-ext-links'} =~ /\bfile\s*=\s*([^;]*[^; ])/;
+		if(defined $file){
+			if(-e $file){
+				my $file_content = slurp $file;
+				$from_id = $1 if $file_content =~ /\bcontinue_from\s*=\s*([0-9]+)/;
+				$to_id = $1 if not defined $to_id and $file_content =~ /\bcontinue_to\s*=\s*([0-9]+)/;
+			}else{
+				$camelbot->msg(1, "file '$file' not found, will be created");
+			}
+		}
+		my $camelbot_rc = CamelBotRC->new($camelbot);
+		$camelbot_rc->db_extlinks_monitoring($from_id, $to_id, $file);
+	}else{
+		$camelbot->msg(0, 'not implemented / wrong syntax', 'error');
+	}
+	$camelbot->msg(1, 'leaving');
+}
 
 if($params->{'cat-add'}){
 	my $pages = [
@@ -3639,12 +3850,13 @@ __END__
 
 =head1 NAME
 
-camelbot manipulates wiki pages
+camelbot manipulates or gets information from wiki pages
 
 =head1 DESCRIPTION
 
-this program is a CLI tool for manipulation pages of a MediaWiki. One of the main 
-tasks is the replacement of external links (urls)
+this program is a CLI tool for automatic editing of MediaWiki pages. one of the 
+main tasks is the replacement of external links (urls). furthermore this tool can 
+be used to just retrieve information on a MediaWiki.
 
 =head1 SYNOPSIS
 
@@ -3664,6 +3876,10 @@ mediawiki/wikipedia login:
 
 mediawiki/wikipedia commands:
 
+     --archive-ext-links=s     save external links at archive.org, using db
+                                param is of format 
+                                  'from_id=...;to_id=...;file=...;'
+                                (syntax may change in future)
      --cat-add                 add a given bunch of pages to a given category
  -c, --cat-change              replaces categories 
      --delete                  delete some pre-defined pages
@@ -3721,6 +3937,11 @@ camelbot -cl
 =head2 GENERAL
 
 =over 8
+
+=item B<--archive-ext-links>=I<string>
+
+save external links at archive.org, using db. param is of format 
+ 'from_id=...;to_id=...;file=...;'
 
 =item B<--cat-add>
 
@@ -3891,7 +4112,7 @@ same as B<--verbose=1>.
 
 =head1 LICENCE
 
-Copyright (c) 2014, seth
+Copyright (c) 2015, seth
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
