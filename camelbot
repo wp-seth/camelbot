@@ -277,7 +277,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.35.20151123';
+$main::VERSION = '1.36.20151223';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -435,7 +435,7 @@ sub syntaxCheck{
 				(?:[^\]\[<>"'\x00-\x20\x7F).]|\)(?!\s))/x,
 			'maintenance' => {
 				're' => {
-					'ASIN'      => qr/\bASIN[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/,
+					'ASIN'      => qr/\bASIN(?:\]\])?[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/,
 					'traditionsverband.de' => qr/\btraditionsverband\.de\b/,
 					'cat dead'  => qr/\[\[\s*(?i:category|kategorie):\s*[Gg]estorben[\s|_]$current_year\s*(?:\|[^\]]*)?\]\]/,
 				},
@@ -764,6 +764,7 @@ sub syntaxCheck{
 			}
 			# db connection parameters
 			$self->{'db'}->{'host'} = $proj . '.labsdb';
+			#$self->{'db'}->{'host'} = 's1.labsdb'; 
 			$self->{'db'}->{'name'} = $proj . '_p';
 			$self->{'db'}->{'port'} = '3306';
 			$self->{'db'}->{'user'} = '';
@@ -2830,10 +2831,10 @@ sub syntaxCheck{
 		my $type          = shift; # type of maintenance list, "all_types" for all types
 		my $maintenance_lists = shift; # maintenance lists
 		if(defined $page and not defined $text){
-			my $text = $self->{'mw_bot'}->get_text($page);
-			$text = \$text if defined $text;
+			my $text_ = $self->{'mw_bot'}->get_text($page);
+			$text = \$text_ if defined $text_;
 		}
-		if(not defined $page or defined $text){
+		if(defined $text or not defined $page){
 			my %intros = (
 				'ASIN' => "dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet, die mind. eine [[Amazon Standard Identification Number|ASIN]] enthalten.\n
 CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass in einem artikel eine ASIN steht, meldet er das nach ca. 30 minuten hier auf dieser seite. auch das loeschen von eintraegen, die keine ASIN mehr enthalten, uebernimmt CamelBot.\n
