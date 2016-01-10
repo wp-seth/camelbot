@@ -434,7 +434,7 @@ sub syntaxCheck{
 				(?:[^\]\[<>"'\x00-\x20\x7F)]|\)(?!\s))*
 				(?:[^\]\[<>"'\x00-\x20\x7F).]|\)(?!\s))/x,
 			'maintenance' => {
-				're' => {
+				'text_re' => {
 					'ASIN'      => qr/\bASIN(?:\]\])?[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/,
 					'traditionsverband.de' => qr/\btraditionsverband\.de\b/,
 					'cat dead'  => qr/\[\[\s*(?i:category|kategorie):\s*[Gg]estorben[\s|_]$current_year\s*(?:\|[^\]]*)?\]\]/,
@@ -458,6 +458,7 @@ sub syntaxCheck{
 			'wm_lang'        => undef, # e.g. de
 			'cliparams'      => $params->{'cliparams'},
 		}, $class;
+		$self->refresh_maintenance_params();
 		$self->login($params->{'mw_password'}); # may change mw_username!
 		return $self;
 	}
@@ -1975,12 +1976,12 @@ sub syntaxCheck{
 		if(defined $text){
 			# ASINs are unwanted in w:de
 			my $notify = 0;
-			my $num_matches =()= $text =~ /$self->{'maintenance'}->{'re'}->{'ASIN'}/g;
+			my $num_matches =()= $text =~ /$self->{'maintenance'}->{'text_re'}->{'ASIN'}/g;
 			if($num_matches > 0 and $page !~ /$self->{'maintenance'}->{'exceptions'}->{'ASIN'}/){
 				# compare with older version
 				if(@hist > 1 and defined $hist[1]->{'revid'}){
 					my $text_prev_version = $self->{'mw_bot'}->get_text($page, $hist[1]->{'revid'});
-					my $num_matches_pv =()= $text_prev_version =~ /$self->{'maintenance'}->{'re'}->{'ASIN'}/g;
+					my $num_matches_pv =()= $text_prev_version =~ /$self->{'maintenance'}->{'text_re'}->{'ASIN'}/g;
 					if($num_matches_pv < $num_matches){
 						$notify = 1;
 					}
@@ -2149,6 +2150,10 @@ sub syntaxCheck{
 		IPC::Run::run([qw(tidy -iq --tidy-mark 0 -f /dev/null -w 5000 -utf8)], 
 			\$html, \$html_cleaned, \$err);
 		return $html_cleaned;
+	}
+
+	sub refresh_maintenance_params{
+		# TODO
 	}
 
 	sub read_file_binary{
@@ -2822,10 +2827,10 @@ sub syntaxCheck{
 	sub update_maintenance_lists{
 		my $self          = shift;
 		# page title or undef; undef means: force update without checking conditions
-		#    page,    text => check old pages in list(s) if text matches
-		# no page,    text => check old pages in list(s)
-		#    page, no text => get text from page or leave function
-		# no page, no text => check old pages in list(s)
+		# no page, no text => check pages in current list(s), update list
+		# no page,    text => same as above
+		#    page,    text => check pages in current list(s) if text matches condition
+		#    page, no text => same as above, but at the beginning: get text from page or leave function
 		my $page          = shift; 
 		my $text          = shift; # ref to string (or undef)
 		my $type          = shift; # type of maintenance list, "all_types" for all types
@@ -2846,22 +2851,25 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass sich in einem artikel ein verweis auf jene domain befindet, meldet er das nach ca. 30 minuten hier auf dieser seite. auch das loeschen von eintraegen, die einen solchen verweis nicht mehr enthalten, uebernimmt CamelBot.\n
 == liste ==\n",
 			);
-			for my $mt_type(keys %{$self->{'maintenance'}->{'re'}}){
+			for my $mt_type(keys %{$self->{'maintenance'}->{'text_re'}}){
 				if(($type eq $mt_type or $type eq 'all_types') and 
-					(not defined $page or $$text =~ /$self->{'maintenance'}->{'re'}->{$mt_type}/)
+					(not defined $page or $$text =~ /$self->{'maintenance'}->{'text_re'}->{$mt_type}/)
 				){
 					$self->msg(1, "check '$mt_type'");
+					# skip exception pages
 					if(defined $page 
 						and defined $self->{'maintenance'}->{'exceptions'}->{$mt_type} 
 						and $page =~ /$self->{'maintenance'}->{'exceptions'}->{$mt_type}/){
 						next;
 					}
-					# todo: how to cope with cat dead?
+					# TODO: how to cope with cat dead?
 					next if $mt_type eq 'cat dead';# and defined $$text 
-					#	and $$text =~/(?:[cC]ategory|[kK]ategorie)\s*:\s*[nN]ekrolog/;
+					#and $$text =~/(?:[cC]ategory|[kK]ategorie)\s*:\s*[nN]ekrolog/;
+					# get maintenance list
 					my $ml = "User:CamelBot/maintenance list/$mt_type";
 					my $ml_text = $self->{'mw_bot'}->get_text($ml) // '';
 					my $ml_text_bak = $ml_text;
+					# rebuild base of maintenance list
 					my $intro = $intros{$mt_type};
 					my $outro = "\n\n[[Kategorie:Wikipedia:Wartungskategorie|$mt_type]]";
 					my $wikitable;
@@ -2875,11 +2883,11 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 							"! page !! date of detection by CamelBot\n".
 							'|}';
 					}
-					# get table content
+					# get old table content
 					my $table = $self->wikitable2array(\$wikitable);
 					my $num_add_cols = @{$table->{'header'}} - 2;
 					$self->msg(1, "number of additional cols = $num_add_cols");
-					# check all old entries; remove entries if possible;
+					# rebuild table: check all old entries; remove entries if possible;
 					# search new entry, if not in array, then push
 					my $already_in_list = 0;
 					my $new_entry = defined $page ? "[[$page]]" : undef;
@@ -2893,14 +2901,14 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 								$page_content = $self->{'mw_bot'}->get_text($page_from_list) // ''; # may be deleted meanwhile
 							}
 							# return value for grep
-							$page_content =~ /$self->{'maintenance'}->{'re'}->{$mt_type}/ 
+							$page_content =~ /$self->{'maintenance'}->{'text_re'}->{$mt_type}/ 
 								or $already_in_list;
 						} @{$table->{'body'}}
 					];
 					# add new list entry
 					if(defined $new_entry and $already_in_list == 0){
 						$self->msg(1, "add new list entry '$page'");
-						# if table has more than 2 columns, then pad row
+						# if table has more than 2 columns, then pad each row
 						my @empty_cells = split //, (' ' x $num_add_cols);
 						push @{$table->{'body'}}, [$new_entry, $self->get_date_iso(), @empty_cells];
 					}
@@ -2912,7 +2920,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 					my $full_auto = 1;
 					# convert array to wikitable
 					$wikitable = $self->table2wikitext($table, !$full_auto);
-					# rebuild page
+					# rebuild page, i.e., put pieces together and save
 					$ml_text = $intro . $wikitable . $outro;
 					$self->time_management();
 					$self->save_wiki_page($ml, 'update maintenance list', \$ml_text, \$ml_text_bak);
