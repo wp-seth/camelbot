@@ -158,15 +158,15 @@ use POSIX qw/strftime/;       # format timestamp
 # 	get col widths defined by ascii art
 #
 # sub handle_cat_dead
-#	given a bunch of categories of dead people, this function updates a maintenance 
-#	list
+# 	given a bunch of categories of dead people, this function updates a maintenance 
+# 	list
 #
 # sub handle_extlinks
-#	given a bunch of external links, this function calls functions like 
-#	archive_ext_links
+# 	given a bunch of external links, this function calls functions like 
+# 	archive_ext_links
 #
 # sub handle_rc_pages
-#	major function for handling of recent changes of short-term and mid-term
+# 	major function for handling of recent changes of short-term and mid-term
 #
 # sub _handle_api_error
 # 	just a centralized short version of mw api error handling
@@ -298,7 +298,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.37.20160131';
+$main::VERSION = '1.38.20160131';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
