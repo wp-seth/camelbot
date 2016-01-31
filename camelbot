@@ -4,6 +4,13 @@
 
 use strict;
 use warnings;
+BEGIN{
+	# used to check whether this script is running on a labs server or somewhere else
+	# on labs e.g. Tk is disabled.
+	our $_running_on_labs = (-e '/data/project/camelbot/perl/lib');
+}
+our $_running_on_labs;
+use if $_running_on_labs, lib => qw(/data/project/camelbot/perl/lib);
 use Carp;                     # better output on errors for debugging purposes
 use Data::Dumper;             # for debugging purposes
 use File::Path qw(make_path); # create directories
@@ -62,6 +69,9 @@ use POSIX qw/strftime/;       # format timestamp
 # sub _db_simplequery
 # 	wrapper for simple db queries
 #
+# sub db_cat_of_dead_monitoring
+# 	use db to monitor added categories of dead people in an endless loop
+#
 # sub db_extlinks_monitoring
 # 	use db to monitor external links in an endless loop
 #
@@ -107,6 +117,10 @@ use POSIX qw/strftime/;       # format timestamp
 #		get ref to an array of hashes, where each hash represents an external link and 
 #		one page where it's used
 #
+# sub get_pages_of_cat_of_dead_via_db
+#		get ref to an array of hashes, where each hash represents a category and 
+#		one page where it's used
+#
 # sub get_rc_via_db
 #		get ref to an array of hashes, where each hash represents a recent change
 #
@@ -143,12 +157,16 @@ use POSIX qw/strftime/;       # format timestamp
 # sub get_wikitable_ascii_col_widths
 # 	get col widths defined by ascii art
 #
+# sub handle_cat_dead
+#	given a bunch of categories of dead people, this function updates a maintenance 
+#	list
+#
 # sub handle_extlinks
-#		given a bunch of external links, this function calls functions like 
-#		archive_ext_links
+#	given a bunch of external links, this function calls functions like 
+#	archive_ext_links
 #
 # sub handle_rc_pages
-#		major function for andling of recent changes of short-term and mid-term
+#	major function for handling of recent changes of short-term and mid-term
 #
 # sub _handle_api_error
 # 	just a centralized short version of mw api error handling
@@ -234,6 +252,9 @@ use POSIX qw/strftime/;       # format timestamp
 # sub update_edit_filter_index
 # 	update page with index of present threads about edit filters
 #
+# sub update_maintenance_lists_build_table
+# 	build a table for update_maintenance_lists
+#
 # sub update_maintenance_lists
 # 	update some maintenance lists on given edit
 #
@@ -277,7 +298,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.36.20151223';
+$main::VERSION = '1.37.20160131';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -311,6 +332,7 @@ sub syntaxCheck{
 		'archive-ext-links'  => undef, # save external links from id till id, using db
 		'cat-add'            => 0,     # add pages to a category
 		'cat-change'         => 0,     # cat change
+		'cat-dead'           => 0,     # cat of the dead
 		'db-access'          => 'replica.my.cnf', # filename with database access data 
 		'diff-from'          => undef, # page or revision id to get a diff from
 		'diff-to'            => undef, # version to diff to
@@ -342,6 +364,7 @@ sub syntaxCheck{
 		'archive-ext-links=s',
 		'cat-add',
 		'cat-change|c',
+		'cat-dead',
 		'db-access=s',
 		'diff-from=s',
 		'diff-to=s',
@@ -398,6 +421,7 @@ sub syntaxCheck{
 
 {
 	package CamelBot;
+	use if $_running_on_labs, lib => qw(/data/project/camelbot/perl/lib);
 	use Data::Dumper;           # for debugging purposes
 	use DBI;                    # db connection
 	use File::Slurp qw(write_file); # read/write files
@@ -405,10 +429,13 @@ sub syntaxCheck{
 	use LWP::UserAgent;         # fast, small web browser
 	use MediaWiki::Bot;         # bot for mediawiki, uses mediawiki-api-interface
 	use POSIX qw/strftime/;     # format timestamp
-	use Term::ReadKey;          # used for user input
-	use Text::Diff;
+	unless($_running_on_labs){
+		require Term::ReadKey;          # used for user input
+		require Text::Diff;
+		require Tk::DiffText;          # graphical diff tool
+		#Term::ReadKey->import(qw());
+	}
 	use Time::Local;            # timegm
-	use Tk::DiffText;           # graphical diff tool
 	use URI::Escape;            # uri_unescape
 
 	sub new{
@@ -765,7 +792,7 @@ sub syntaxCheck{
 			}
 			# db connection parameters
 			$self->{'db'}->{'host'} = $proj . '.labsdb';
-			#$self->{'db'}->{'host'} = 's1.labsdb'; 
+			#$self->{'db'}->{'host'} = 's1.labsdb';
 			$self->{'db'}->{'name'} = $proj . '_p';
 			$self->{'db'}->{'port'} = '3306';
 			$self->{'db'}->{'user'} = '';
@@ -859,14 +886,50 @@ sub syntaxCheck{
 	#	}
 	#}
 
+	sub db_fetch_pages_of_categories_of_the_dead{
+		my $self    = shift;
+		my $since   = shift;
+		if(defined $since and 
+			$since !~ /^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\z/)
+		{
+			$self->msg(0, 'param $since is not valid, see source code', 'warning');
+			return [];
+		}
+		my $return_header = 1;
+		my $sql_query = '
+			SELECT 
+				`page`.`page_title` AS `page`, 
+				`cl_to` AS `category`,
+				`cl_timestamp`
+			FROM `categorylinks` 
+			LEFT JOIN `page` 
+				ON `page`.`page_id`=`cl_from` 
+			WHERE `cl_to` LIKE \'Gestorben_2%%\' 
+				AND `cl_timestamp` >= ' . (defined $since ? '%s' : 'date_sub(now(), interval 2 day)') . 
+			' LIMIT 10000';
+		my $db_table = defined $since ? 
+		  $self->_db_simplequery([$sql_query, $since], $return_header)
+		: $self->_db_simplequery([$sql_query], $return_header);
+		for my $row(@$db_table[1..(@$db_table-1)]){
+			utf8::decode($row->[0]);
+		}
+		return $self->db_table2array_of_hash($db_table);
+	}
+
 	sub db_fetch_externallinks{
 		my $self    = shift;
 		my $from_id = shift // 1;
 		my $to_id   = shift;
+		if($from_id !~ /^[0-9]+\z/){
+			$self->msg(0, 'param $from_id is not valid, see source code', 'warning');
+			return [];
+		}elsif(defined $to_id and $to_id !~ /^[0-9]+\z/){
+			$self->msg(0, 'param $to_id is not valid, see source code', 'warning');
+			return [];
+		}
 		my $return_header = 1;
 		my $db_table;
 		my $sql_max_id = defined $to_id ? 'AND `el_id`<=%s' : '';
-		# TODO: what is the right name for page.name?
 		$db_table = $self->_db_simplequery(['
 				SELECT `el_id`, `el_from`, `el_to`, `p`.`page_title` AS `page`
 				FROM `externallinks`
@@ -1818,13 +1881,15 @@ sub syntaxCheck{
 					print '  '.$pwfile->[$_].', ' for 0..($#$pwfile-1);
 					print $pwfile->[-1]."\n";
 				}
-				$self->msg(0, "enter password (will not be echoed):");
-				ReadMode 'raw';
-				$wiki_password = ReadLine(0);
-				chomp($wiki_password);
-				ReadMode 'restore';
-				while($wiki_password =~ /\x{007f}/){
-					$wiki_password =~ s/(?:^|[^\x{007f}])\x{007f}//g;
+				unless($_running_on_labs){
+					$self->msg(0, "enter password (will not be echoed):");
+					ReadMode('raw') if defined &ReadMode;
+					$wiki_password = ReadLine(0) if defined &ReadLine;
+					chomp($wiki_password);
+					ReadMode('restore') if defined &ReadMode;
+					while($wiki_password =~ /\x{007f}/){
+						$wiki_password =~ s/(?:^|[^\x{007f}])\x{007f}//g;
+					}
 				}
 			}
 		}
@@ -2286,7 +2351,8 @@ sub syntaxCheck{
 		my $self      = shift;
 		my $text      = shift;
 		my $orig_text = shift;
-		my $diff      = diff($text, $orig_text);
+		return undef if $_running_on_labs;
+		my $diff      = Text::Diff::diff($text, $orig_text);
 		my $result;
 		print $diff if $self->{'showdiff'} & 1;
 		if($self->{'showdiff'} & 2){
@@ -2308,7 +2374,7 @@ sub syntaxCheck{
 			}
 			chomp($shortend_text);
 			chomp($shortend_orig_text);
-			my $mw = new MainWindow;
+			my $mw = Tk::MainWindow->new;
 			my $w = $mw->DiffText(
 				-width=>1500, -height=>500, -orient => 'horizontal', -map => 'scrolled'
 			)->pack();
@@ -2319,7 +2385,7 @@ sub syntaxCheck{
 			$mw->bind('<KeyPress-y>' => sub {$result = '1'; $mw->destroy;} );
 			$mw->bind('<KeyPress-q>' => sub {exit 0;} );
 			$mw->bind('<KeyPress>' => sub {$result = '0'; $mw->destroy;} );
-			MainLoop;
+			$mw->MainLoop;
 		}
 		return $result;
 	}
@@ -2824,6 +2890,72 @@ sub syntaxCheck{
 		return 1;
 	}
 
+	sub update_maintenance_lists_build_table{
+		my $self    = shift;
+		my $intro   = shift;
+		my $maintenance_lists = shift; # maintenance lists
+		my $mt_type = shift;
+		my $page    = shift;
+		# get maintenance list
+		my $ml = "User:CamelBot/maintenance list/$mt_type";
+		my $ml_text = $self->{'mw_bot'}->get_text($ml) // '';
+		my $ml_text_bak = $ml_text;
+		# rebuild base of maintenance list
+		my $outro = "\n\n[[Kategorie:Wikipedia:Wartungskategorie|$mt_type]]";
+		my $wikitable;
+		if($ml_text =~ /^(.*\n== [lL]iste? ==\n+.*?)(\{\|.*?\|\})\n(.*)$/s){ # extract (save) old intro
+			$intro = $1;
+			$wikitable = $2;
+			$outro = $3;
+		}else{
+			$self->msg(1, 'could not fetch table. resetting page.', 'notice');
+			$wikitable = '{| class="wikitable sortable"' . "\n".
+				"! page !! date of detection by CamelBot\n".
+				'|}';
+		}
+		# get old table content
+		my $table = $self->wikitable2array(\$wikitable);
+		my $num_add_cols = @{$table->{'header'}} - 2;
+		$self->msg(1, "number of additional cols = $num_add_cols");
+		# rebuild table: check all old entries; remove entries if possible;
+		# search new entry, if not in array, then push
+		my $already_in_list = 0;
+		my $new_entry = defined $page ? "[[$page]]" : undef;
+		$table->{'body'} = [grep {
+				my $page_content = '';
+				if(defined $new_entry and $_->[0] eq $new_entry){
+					$self->msg(1, "page '$page' already in list");
+					$already_in_list = 1;
+				}elsif($_->[0] =~ /^\[\[(.*)\]\]$/){
+					my $page_from_list = $1;
+					$page_content = $self->{'mw_bot'}->get_text($page_from_list) // ''; # may be deleted meanwhile
+				}
+				# return value for grep
+				$page_content =~ /$self->{'maintenance'}->{'text_re'}->{$mt_type}/ 
+					or $already_in_list;
+			} @{$table->{'body'}}
+		];
+		# add new list entry
+		if(defined $new_entry and $already_in_list == 0){
+			$self->msg(1, "add new list entry '$page'");
+			# if table has more than 2 columns, then pad each row
+			my @empty_cells = split //, (' ' x $num_add_cols);
+			push @{$table->{'body'}}, [$new_entry, $self->get_date_iso(), @empty_cells];
+		}
+		# reset and refill maintenance list
+		$maintenance_lists->{$mt_type} = {}; 
+		for my $entry(@{$table->{'body'}}){
+			$maintenance_lists->{$mt_type}->{substr($entry->[0], 2, -2)} = 1;
+		}
+		my $full_auto = 1;
+		# convert array to wikitable
+		$wikitable = $self->table2wikitext($table, !$full_auto);
+		# rebuild page, i.e., put pieces together and save
+		$ml_text = $intro . $wikitable . $outro;
+		$self->time_management();
+		$self->save_wiki_page($ml, 'update maintenance list', \$ml_text, \$ml_text_bak);
+	}
+
 	sub update_maintenance_lists{
 		my $self          = shift;
 		# page title or undef; undef means: force update without checking conditions
@@ -2865,65 +2997,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 					# TODO: how to cope with cat dead?
 					next if $mt_type eq 'cat dead';# and defined $$text 
 					#and $$text =~/(?:[cC]ategory|[kK]ategorie)\s*:\s*[nN]ekrolog/;
-					# get maintenance list
-					my $ml = "User:CamelBot/maintenance list/$mt_type";
-					my $ml_text = $self->{'mw_bot'}->get_text($ml) // '';
-					my $ml_text_bak = $ml_text;
-					# rebuild base of maintenance list
-					my $intro = $intros{$mt_type};
-					my $outro = "\n\n[[Kategorie:Wikipedia:Wartungskategorie|$mt_type]]";
-					my $wikitable;
-					if($ml_text =~ /^(.*\n== [lL]iste? ==\n+.*?)(\{\|.*?\|\})\n(.*)$/s){ # extract (save) old intro
-						$intro = $1;
-						$wikitable = $2;
-						$outro = $3;
-					}else{
-						$self->msg(1, 'could not fetch table. resetting page.', 'notice');
-						$wikitable = '{| class="wikitable sortable"' . "\n".
-							"! page !! date of detection by CamelBot\n".
-							'|}';
-					}
-					# get old table content
-					my $table = $self->wikitable2array(\$wikitable);
-					my $num_add_cols = @{$table->{'header'}} - 2;
-					$self->msg(1, "number of additional cols = $num_add_cols");
-					# rebuild table: check all old entries; remove entries if possible;
-					# search new entry, if not in array, then push
-					my $already_in_list = 0;
-					my $new_entry = defined $page ? "[[$page]]" : undef;
-					$table->{'body'} = [grep {
-							my $page_content = '';
-							if(defined $new_entry and $_->[0] eq $new_entry){
-								$self->msg(1, "page '$page' already in list");
-								$already_in_list = 1;
-							}elsif($_->[0] =~ /^\[\[(.*)\]\]$/){
-								my $page_from_list = $1;
-								$page_content = $self->{'mw_bot'}->get_text($page_from_list) // ''; # may be deleted meanwhile
-							}
-							# return value for grep
-							$page_content =~ /$self->{'maintenance'}->{'text_re'}->{$mt_type}/ 
-								or $already_in_list;
-						} @{$table->{'body'}}
-					];
-					# add new list entry
-					if(defined $new_entry and $already_in_list == 0){
-						$self->msg(1, "add new list entry '$page'");
-						# if table has more than 2 columns, then pad each row
-						my @empty_cells = split //, (' ' x $num_add_cols);
-						push @{$table->{'body'}}, [$new_entry, $self->get_date_iso(), @empty_cells];
-					}
-					# reset and refill maintenance list
-					$maintenance_lists->{$mt_type} = {}; 
-					for my $entry(@{$table->{'body'}}){
-						$maintenance_lists->{$mt_type}->{substr($entry->[0], 2, -2)} = 1;
-					}
-					my $full_auto = 1;
-					# convert array to wikitable
-					$wikitable = $self->table2wikitext($table, !$full_auto);
-					# rebuild page, i.e., put pieces together and save
-					$ml_text = $intro . $wikitable . $outro;
-					$self->time_management();
-					$self->save_wiki_page($ml, 'update maintenance list', \$ml_text, \$ml_text_bak);
+					$self->update_maintenance_lists_build_table($intros{$mt_type}, $maintenance_lists, $mt_type, $page);
 				}
 			}
 			return 1;
@@ -3088,6 +3162,22 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		return $extlinks;
 	}
 
+	sub get_pages_of_cat_of_dead_via_db{
+		my $self  = shift;
+		my $since = shift;
+		my $pages = $self->{'camelbot'}->db_fetch_pages_of_categories_of_the_dead($since);
+		if(defined $pages){
+			for my $dataset(@$pages){
+				$dataset->{'page'} =~ s/_/ /g;
+				$dataset->{'category'} =~ s/_/ /g;
+			}
+			if($self->{'camelbot'}{'verbosity'} >= 2 or @$pages > 50){
+				$self->{'camelbot'}->msg(1, 'got ' . (0 + @$pages) . ' entries.');
+			}
+		}
+		return $pages;
+	}
+
 	sub get_rc_via_db{
 		my $self = shift;
 		my $camelbot = $self->{'camelbot'};
@@ -3123,6 +3213,62 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			$camelbot->msg(1, 'got '.(0+@$rc_pages).' entries.');
 		}
 		return $rc_pages;
+	}
+
+	sub handle_cat_dead{
+		my $self  = shift;
+		my $pages = shift;
+		my $camelbot = $self->{'camelbot'};
+		my $mt_type = 'categories of the dead';
+		# get maintenance list
+		my $ml = "User:CamelBot/maintenance list/$mt_type";
+		my $ml_text = $camelbot->{'mw_bot'}->get_text($ml) // '';
+		my $ml_text_bak = $ml_text;
+		# rebuild base of maintenance list
+		my $intro = "dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet, die der category ''gestorben 2xxx'' hinzugefuegt wurden.\n
+CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass ein artikel dieser category hinzugefuegt wird, meldet er das hier auf dieser seite. dabei fuegt er gefundene artikel nur der liste hinzu. loeschen muss man manuell.\n
+== liste ==\n";
+		my $outro = "\n\n[[Kategorie:Wikipedia:Wartungskategorie|$mt_type]]";
+		my $wikitable;
+		if($ml_text =~ /^(.*\n== [lL]iste? ==\n+.*?)(\{\|.*?\|\})\n(.*)$/s){ # extract (save) old intro
+			$intro = $1;
+			$wikitable = $2;
+			$outro = $3;
+		}else{
+			$camelbot->msg(1, 'could not fetch table. resetting page.', 'notice');
+			$wikitable = '{| class="wikitable sortable"' . "\n".
+				"! page !! category !! date of detection by CamelBot\n".
+				'|}';
+		}
+		# get old table content
+		my $table = $camelbot->wikitable2array(\$wikitable);
+		my $num_add_cols = @{$table->{'header'}} - 3;
+		$camelbot->msg(1, "number of additional cols = $num_add_cols");
+		# rebuild table: check all old entries; remove entries if possible;
+		# search new entry, if not in array, then push
+		for my $page(@$pages){
+			my $new_entry = "[[$page->{'page'}]]";
+			if(grep {
+					$_->[0] eq $new_entry and $_->[1] eq $page->{'category'}
+				} @{$table->{'body'}}
+			){
+				$camelbot->msg(1, "page '$page->{'page'}' already in list");
+				next;
+			}else{ # add to list
+				$camelbot->msg(1, "add new list entry '$page->{'page'}'");
+				# if table has more than 3 columns, then pad each row
+				my @empty_cells = split //, (' ' x $num_add_cols);
+				push @{$table->{'body'}}, [$new_entry, $page->{'category'}, $camelbot->get_date_iso(), @empty_cells];
+			}
+		}
+		my $full_auto = 1;
+		# convert array to wikitable
+		$wikitable = $camelbot->table2wikitext($table, !$full_auto);
+		# rebuild page, i.e., put pieces together and save
+		$ml_text = $intro . $wikitable . $outro;
+		$camelbot->time_management();
+		$camelbot->save_wiki_page($ml, 'update maintenance list', \$ml_text, \$ml_text_bak);
+		return 1;
 	}
 
 	sub handle_extlinks{
@@ -3314,6 +3460,65 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		return 1;
 	}
 
+	sub db_cat_of_dead_monitoring{
+		my $self  = shift;
+		my $last_check = 0;
+		my $continue_timestamp = strftime("%Y-%m-%d %H:%M:%S", gmtime(time()-60*60*24*2));
+		my $camelbot = $self->{'camelbot'};
+		my $sleep_delay = 115; # seconds
+		my @edge_articles_bak = (); # articles at a specific timestamp
+		while(1){ # endless loop, break via ctrl-c
+			# wait for $sleep_delay seconds before sending a query to db again
+			if($last_check + $sleep_delay > time){
+				my $sleep_time = $sleep_delay + $last_check - time;
+				$camelbot->msg(2, "sleep $sleep_time seconds");
+				sleep($sleep_time);
+			}
+			$last_check = time;
+			$camelbot->msg(2, 'get new pages of categories of the dead from db');
+			my $new_entries = $self->get_pages_of_cat_of_dead_via_db($continue_timestamp);
+			# delete multiple entries of same page
+			$camelbot->msg(2, 'delete multiple entries');
+			my %dbl_counter;
+			$new_entries = [reverse
+				grep {
+					$dbl_counter{$_->{'page'}} = (exists $dbl_counter{$_->{'page'}}) ? 0 : 1;
+					$dbl_counter{$_->{'page'}};
+				} sort {$b->{'cl_timestamp'} cmp $a->{'cl_timestamp'}} @$new_entries
+			];
+			if(@$new_entries > 0 and
+				$continue_timestamp ne $new_entries->[-1]->{'cl_timestamp'})
+			{
+				@edge_articles_bak = (); # reset array of redundant articles
+				$continue_timestamp = $new_entries->[-1]->{'cl_timestamp'};
+				$camelbot->msg(1, 'last cl_timestamp: ' . $continue_timestamp);
+			}
+			# delete redundant entries of newest timestamp, because they will be 
+			# re-fetched in next step along with others (that maybe of the same timestamp)
+			# step 1: delete all entries of newest timestamp
+			my @edge_articles = (); # articles at a specific timestamp
+			while(@$new_entries > 0 
+					and $new_entries->[-1]->{'cl_timestamp'} eq $continue_timestamp){
+				unshift @edge_articles, pop @$new_entries;
+			}
+			# step 2: restore those elements that are not handled already
+			for my $edge_article(@edge_articles){
+				unless(grep {$_ eq $edge_article} @edge_articles_bak){
+					push @$new_entries, $edge_article;
+					push @edge_articles_bak, $edge_article;
+				}
+			}
+			if(@$new_entries > 0){
+				$camelbot->msg(1, 'got ' . (0 + @$new_entries) . ' new entries');
+				$self->handle_cat_dead($new_entries);
+				$sleep_delay = 1; 
+			}else{
+				$camelbot->msg(2, 'got 0 new entries');
+				$sleep_delay = 115; 
+			}
+		}
+	}
+
 	sub db_extlinks_monitoring{
 		my $self    = shift;
 		my $from_id = shift // 1;
@@ -3349,7 +3554,6 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 				++$from_id;
 				$camelbot->msg(1, 'got ' . (0 + @$new_extlinks) . ' new external links');
 				$self->handle_extlinks($new_extlinks);
-				# TODO: update file_of_state
 				write_file($file_of_state, {binmode => ':utf8'}, 
 					'continue_from=' . ($from_id + 1) . ';' . 
 					'continue_to=' . ($to_id // ''));
@@ -3395,7 +3599,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 						and $new_rc_pages->[-1]->{'timestamp'} eq $continue_timestamp){
 					pop @$new_rc_pages;
 				}
-				$camelbot->msg(1, 'got '.(0+@$new_rc_pages).' new pages');
+				$camelbot->msg(1, 'got ' . (0 + @$new_rc_pages) . ' new pages');
 				$self->put_new_rc($new_rc_pages);
 			}
 		}
@@ -3526,6 +3730,12 @@ if($params->{'cat-add'}){
 
 if($params->{'cat-change'}){
 	$camelbot->cat_rename('Software tool', 'Library or package');
+}
+
+if($params->{'cat-dead'}){
+	my $camelbot_rc = CamelBotRC->new($camelbot);
+	$camelbot_rc->db_cat_of_dead_monitoring();
+	$camelbot->msg(1, 'leaving');
 }
 
 if($params->{'delete'}){
@@ -3891,6 +4101,8 @@ mediawiki/wikipedia commands:
                                 (syntax may change in future)
      --cat-add                 add a given bunch of pages to a given category
  -c, --cat-change              replaces categories 
+     --cat-dead                check recent changes (in dewiki) for additions of 
+                                categories of (recently) died people
      --delete                  delete some pre-defined pages
      --diff-from=s             revision id to get a diff from
      --diff-to=s               revision id (or 'prev' or 'next') to get a diff to
@@ -3901,7 +4113,7 @@ mediawiki/wikipedia commands:
  -m, --minor=[01]              mark edit(s) as minor (1) or not (0), default = 1
      --parse=s                 parses wikitext from file and saves result as new 
                                 file
-     --rc-monitoring=s         start monitoring of recent changes (in w:de) via
+     --rc-monitoring=s         start monitoring of recent changes (in dewiki) via
                                 irc - an irc bot
                                 db  - an db connection
      --save_as_html=s          saves a given wiki page as local html-file
@@ -3959,6 +4171,11 @@ add a given bunch of pages to a given category.
 =item B<--cat-change>, B<-c>
 
 replaces categories 
+
+=item B<--cat-dead>
+
+check recent changes (in dewiki) for additions of categories of (recently) died 
+people
 
 =item B<--db-access=I<filename>>
 
