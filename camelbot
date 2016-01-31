@@ -298,7 +298,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.38.20160131';
+$main::VERSION = '1.39.20160131';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -3503,17 +3503,16 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			}
 			# step 2: restore those elements that are not handled already
 			for my $edge_article(@edge_articles){
-				unless(grep {$_ eq $edge_article} @edge_articles_bak){
+				unless(grep {$_->{'page'} eq $edge_article->{'page'}} @edge_articles_bak){
 					push @$new_entries, $edge_article;
 					push @edge_articles_bak, $edge_article;
 				}
 			}
+			$camelbot->msg(1, 'got ' . (0 + @$new_entries) . ' new entries');
 			if(@$new_entries > 0){
-				$camelbot->msg(1, 'got ' . (0 + @$new_entries) . ' new entries');
 				$self->handle_cat_dead($new_entries);
 				$sleep_delay = 1; 
 			}else{
-				$camelbot->msg(2, 'got 0 new entries');
 				$sleep_delay = 115; 
 			}
 		}
@@ -3608,6 +3607,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 
 {
 	package CamelBotIRC;
+	use if $_running_on_labs, lib => qw(/data/project/camelbot/perl/lib);
 	use parent qw(Bot::BasicBot); # irc bot
 	use Data::Dumper;           # for debugging purposes
 	use Time::Local;            # timegm
