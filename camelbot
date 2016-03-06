@@ -78,6 +78,9 @@ use POSIX qw/strftime/;       # format timestamp
 # sub db_fetch_externallinks
 # 	use db to get external links for a given range of el_ids of el-table
 #
+# sub db_fetch_pages_of_categories_of_the_dead
+# 	use db to get pages that are contained in a category concerning dead people
+#
 # sub db_fetch_recentchanges
 # 	use db to get recent changes for a given time period
 #
@@ -899,19 +902,21 @@ sub syntaxCheck{
 		my $sql_query = '
 			SELECT 
 				`page`.`page_title` AS `page`, 
+				`page`.`page_namespace` AS `namespace`, 
 				`cl_to` AS `category`,
 				`cl_timestamp`
 			FROM `categorylinks` 
 			LEFT JOIN `page` 
 				ON `page`.`page_id`=`cl_from` 
 			WHERE `cl_to` LIKE \'Gestorben_2%%\' 
+				AND `page_namespace` = '0'
 				AND `cl_timestamp` >= ' . (defined $since ? '%s' : 'date_sub(now(), interval 2 day)') . 
 			' LIMIT 10000';
 		my $db_table = defined $since ? 
 		  $self->_db_simplequery([$sql_query, $since], $return_header)
 		: $self->_db_simplequery([$sql_query], $return_header);
 		for my $row(@$db_table[1..(@$db_table-1)]){
-			utf8::decode($row->[0]);
+			utf8::decode($row->[0]); # page
 		}
 		return $self->db_table2array_of_hash($db_table);
 	}
