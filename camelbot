@@ -301,7 +301,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.39.20160131';
+$main::VERSION = '1.40.20160306';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -465,14 +465,20 @@ sub syntaxCheck{
 				(?:[^\]\[<>"'\x00-\x20\x7F).]|\)(?!\s))/x,
 			'maintenance' => {
 				'text_re' => {
-					'ASIN'      => qr/\bASIN(?:\]\])?[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/,
+					'ASIN'        => qr/\bASIN(?:\]\])?[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/,
+					'local_files' => qr/\bfile\:\/{3}/i,
 					'traditionsverband.de' => qr/\btraditionsverband\.de\b/,
-					'cat dead'  => qr/\[\[\s*(?i:category|kategorie):\s*[Gg]estorben[\s|_]$current_year\s*(?:\|[^\]]*)?\]\]/,
+					'cat dead'    => qr/\[\[\s*(?i:category|kategorie):\s*[Gg]estorben[\s|_]$current_year\s*(?:\|[^\]]*)?\]\]/,
 				},
 				'exceptions' => {
-					'ASIN'      => qr/^Amazon Standard Identification Number\z/,
+					'ASIN'        => qr/^Amazon Standard Identification Number\z/,
+					'local files' => qr/^(?:Uniform Resource (?:Identifier|Locator)|XML Base|XML Shareable Playlist Format)\z/,
 					'traditionsverband.de' => undef,
-					'cat dead'  => undef,
+					'cat dead'    => undef,
+				},
+				'notifiers'     => {
+					'ASIN'        => 'Hinweis auf Katalog-Nummern von Amazon', 
+					'local files' => 'Hinweis auf Verlinkung lokaler Dateien',
 				},
 			},
 			# 0 = don't show diff; 1 = show a diff, 2 = gui
@@ -909,7 +915,7 @@ sub syntaxCheck{
 			LEFT JOIN `page` 
 				ON `page`.`page_id`=`cl_from` 
 			WHERE `cl_to` LIKE \'Gestorben_2%%\' 
-				AND `page_namespace` = '0'
+				AND `page_namespace` = \'0\'
 				AND `cl_timestamp` >= ' . (defined $since ? '%s' : 'date_sub(now(), interval 2 day)') . 
 			' LIMIT 10000';
 		my $db_table = defined $since ? 
@@ -2042,43 +2048,63 @@ sub syntaxCheck{
 			return 0;
 		}
 		# get newest version of page content
-		my $text = $self->{'mw_bot'}->get_text($page, $hist[0]->{'revid'});
-		if(defined $text){
-			# ASINs are unwanted in w:de
-			my $notify = 0;
-			my $num_matches =()= $text =~ /$self->{'maintenance'}->{'text_re'}->{'ASIN'}/g;
-			if($num_matches > 0 and $page !~ /$self->{'maintenance'}->{'exceptions'}->{'ASIN'}/){
-				# compare with older version
-				if(@hist > 1 and defined $hist[1]->{'revid'}){
-					my $text_prev_version = $self->{'mw_bot'}->get_text($page, $hist[1]->{'revid'});
-					my $num_matches_pv =()= $text_prev_version =~ /$self->{'maintenance'}->{'text_re'}->{'ASIN'}/g;
-					if($num_matches_pv < $num_matches){
-						$notify = 1;
-					}
+		my $page_text = $self->{'mw_bot'}->get_text($page, $hist[0]->{'revid'});
+		if(defined $page_text){
+			# ASINs and local files are unwanted in w:de
+			my %num_matches;
+			# get number of occurrences in present page
+			for my $ntf_type(keys %{$self->{'maintenance'}->{'notifiers'}}){
+				if($page =~ /$self->{'maintenance'}->{'exceptions'}->{$ntf_type}/){
+					$num_matches{$ntf_type} = 0; 
 				}else{
-					$notify = 1;
+					$num_matches{$ntf_type} =()= $page_text =~ 
+						/$self->{'maintenance'}->{'text_re'}->{$ntf_type}/g;
 				}
 			}
-			if($notify){
-				my $user_to_inform = $hist[0]->{'user'};
-				my $userpage = 'User talk:' . $user_to_inform;
-				$text = $self->{'mw_bot'}->get_text($userpage) // '';
-				if($self->is_allowed(\$text, $userpage)){
-					my $text_bak = $text;
-					my $heading = 'Hinweis auf Katalog-Nummern von Amazon';
-					if($text =~ /\Q$heading\E/){
-						$self->msg(1, "user '$user_to_inform' seems to be informed already.", 
-							'notice');
-					}else{
-						my $notice = $self->{'mw_bot'}->get_text('user:CamelBot/notice-ASIN');
-						my $title = $self->title2url_part($page);
-						$notice =~ s/\$diff\b/\/\/de.wikipedia.org\/w\/index.php?title=$title&diff=prev&oldid=$hist[0]->{'revid'}/g;
-						$notice =~ s/\$article\b/$page/g;
-						$notice =~ s/\$signature\b.*/-- ~~~~/sg;
-						$text .= "\n== $heading ==\n$notice\n";
-						$self->time_management();
-						$self->msg(2, "notifying on '$userpage'");
-						$self->save_wiki_page($userpage, $heading, \$text, \$text_bak);
+			# any matches in present page?
+			if(grep {$_ > 0} values %num_matches){
+				my $notify = 'no';
+				my $page_text_prev_version;
+				# get older version of page if available
+				if(@hist > 1 and defined $hist[1]->{'revid'}){
+					$page_text_prev_version = $self->{'mw_bot'}->get_text($page, $hist[1]->{'revid'});
+				}else{
+					$notify = 'yes';
+				}
+				for my $ntf_type(keys %{$self->{'maintenance'}->{'notifiers'}}){
+					next if $num_matches{$ntf_type} == 0;
+					# compare with older version
+					if($notify eq 'no'){
+						my $num_matches_pv =()= $page_text_prev_version =~ /$self->{'maintenance'}->{'text_re'}->{$ntf_type}/g;
+						if($num_matches_pv < $num_matches{$ntf_type}){
+							$notify = 'this time';
+						}
+					}
+					if($notify ne 'no'){
+						my $user_to_inform = $hist[0]->{'user'};
+						my $userpage = 'User talk:' . $user_to_inform;
+						my $text = $self->{'mw_bot'}->get_text($userpage) // '';
+						if($self->is_allowed(\$text, $userpage)){
+							my $text_bak = $text;
+							my $heading = $self->{'maintenance'}->{'notifiers'}->{$ntf_type};
+							if($text =~ /\Q$heading\E/){
+								$self->msg(1, "user '$user_to_inform' seems to be informed already.", 
+									'notice');
+							}else{
+								my $notice = $self->{'mw_bot'}->get_text('user:CamelBot/notice-' . $ntf_type);
+								my $title = $self->title2url_part($page);
+								my $wp_path = '//de.wikipedia.org/w/index.php';
+								# replace variables in notice template
+								$notice =~ s/\$diff\b/$wp_path?title=$title&diff=prev&oldid=$hist[0]->{'revid'}/g;
+								$notice =~ s/\$article\b/$page/g;
+								$notice =~ s/\$signature\b.*/-- ~~~~/sg;
+								$text .= "\n== $heading ==\n$notice\n";
+								$self->time_management();
+								$self->msg(2, "notifying on '$userpage'");
+								$self->save_wiki_page($userpage, $heading, \$text, \$text_bak);
+							}
+						}
+						$notify = 'no' if $notify eq 'this time';
 					}
 				}
 			}
@@ -2984,6 +3010,9 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 				'cat dead' => "dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet, die der category ''gestorben " . (strftime('%Y', gmtime())) . "'' hinzugefuegt wurden.\n
 CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass ein artikel dieser category hinzugefuegt wird, meldet er das nach ca. 30 minuten hier auf dieser seite. dabei fuegt er gefundene artikel nur der liste hinzu. loeschen muss man manuell.\n
 == liste ==\n",
+				'local files' => "dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet, die mind. eine relative adresse auf die festplatte enthalten.\n
+CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass in einem artikel eine solche adresse steht, meldet er das nach ca. 30 minuten hier auf dieser seite. auch das loeschen von eintraegen, die keine solche adresse mehr enthalten, uebernimmt CamelBot.\n
+== liste ==\n",
 				'traditionsverband.de' => "dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet, die mind. einen verweis auf traditionsverband.de enthalten.\n
 CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass sich in einem artikel ein verweis auf jene domain befindet, meldet er das nach ca. 30 minuten hier auf dieser seite. auch das loeschen von eintraegen, die einen solchen verweis nicht mehr enthalten, uebernimmt CamelBot.\n
 == liste ==\n",
@@ -2992,6 +3021,9 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 				if(($type eq $mt_type or $type eq 'all_types') and 
 					(not defined $page or $$text =~ /$self->{'maintenance'}->{'text_re'}->{$mt_type}/)
 				){
+					# TODO: how to cope with cat dead? right now using another function 
+					# db_cat_of_dead_monitoring
+					next if $mt_type eq 'cat dead';# and defined $$text 
 					$self->msg(1, "check '$mt_type'");
 					# skip exception pages
 					if(defined $page 
@@ -2999,10 +3031,9 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 						and $page =~ /$self->{'maintenance'}->{'exceptions'}->{$mt_type}/){
 						next;
 					}
-					# TODO: how to cope with cat dead?
-					next if $mt_type eq 'cat dead';# and defined $$text 
 					#and $$text =~/(?:[cC]ategory|[kK]ategorie)\s*:\s*[nN]ekrolog/;
-					$self->update_maintenance_lists_build_table($intros{$mt_type}, $maintenance_lists, $mt_type, $page);
+					$self->update_maintenance_lists_build_table($intros{$mt_type}, 
+						$maintenance_lists, $mt_type, $page);
 				}
 			}
 			return 1;
