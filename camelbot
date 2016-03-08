@@ -301,7 +301,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.40.20160306';
+$main::VERSION = '1.41.20160308';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -467,12 +467,14 @@ sub syntaxCheck{
 				'text_re' => {
 					'ASIN'        => qr/\bASIN(?:\]\])?[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/,
 					'local_files' => qr/\bfile\:\/{3}/i,
+					'finanznachrichten.de' => qr/\bfinanznachrichten\.de\b/,
 					'traditionsverband.de' => qr/\btraditionsverband\.de\b/,
 					'cat dead'    => qr/\[\[\s*(?i:category|kategorie):\s*[Gg]estorben[\s|_]$current_year\s*(?:\|[^\]]*)?\]\]/,
 				},
 				'exceptions' => {
 					'ASIN'        => qr/^Amazon Standard Identification Number\z/,
 					'local files' => qr/^(?:Uniform Resource (?:Identifier|Locator)|XML Base|XML Shareable Playlist Format)\z/,
+					'finanznachrichten.de' => undef,
 					'traditionsverband.de' => undef,
 					'cat dead'    => undef,
 				},
@@ -3012,6 +3014,9 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 == liste ==\n",
 				'local files' => "dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet, die mind. eine relative adresse auf die festplatte enthalten.\n
 CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass in einem artikel eine solche adresse steht, meldet er das nach ca. 30 minuten hier auf dieser seite. auch das loeschen von eintraegen, die keine solche adresse mehr enthalten, uebernimmt CamelBot.\n
+== liste ==\n",
+				'finanznachrichten.de' => "dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet, die mind. einen verweis auf finanznachrichten.de enthalten.\n
+CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass sich in einem artikel ein verweis auf jene domain befindet, meldet er das nach ca. 30 minuten hier auf dieser seite. auch das loeschen von eintraegen, die einen solchen verweis nicht mehr enthalten, uebernimmt CamelBot.\n
 == liste ==\n",
 				'traditionsverband.de' => "dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet, die mind. einen verweis auf traditionsverband.de enthalten.\n
 CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass sich in einem artikel ein verweis auf jene domain befindet, meldet er das nach ca. 30 minuten hier auf dieser seite. auch das loeschen von eintraegen, die einen solchen verweis nicht mehr enthalten, uebernimmt CamelBot.\n
