@@ -301,7 +301,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.41.20160308';
+$main::VERSION = '1.42.20160309';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -2341,6 +2341,7 @@ sub syntaxCheck{
 		my $summary = shift;
 		my $text = shift;
 		my $orig_text = shift;
+		my $success = 1; # no change or just simulation
 		if($$text ne $$orig_text){
 			my $user_answer_diff;
 			# comment the following 3 lines if no X/tk is available.
@@ -2359,16 +2360,31 @@ sub syntaxCheck{
 					$self->{'user_answer'} = 'y';
 					my $page = $page_utf8;
 					utf8::encode($page);
-					$self->msg(1, "saving page [[$page]] ... ");
-					push @{$self->{'time_stack'}}, time;
-					$self->{'mw_bot'}->edit({
-							is_minor => $self->{'minor'},
-							page     => $page_utf8,
-							text     => $$text,
-							bot      => 1,
-							summary  => "Bot: $summary",
-					}) or $self->_handle_api_error();
+					for(my $num_tries = 1; $num_tries < 4 and $success <= 1; ++$num_tries){
+						$self->msg(1, "saving page [[$page]] ... ");
+						push @{$self->{'time_stack'}}, time;
+						my $res = $self->{'mw_bot'}->edit({
+								is_minor => $self->{'minor'},
+								page     => $page_utf8,
+								text     => $$text,
+								bot      => 1,
+								summary  => "Bot: $summary",
+						});
+						if($res){
+							$success = 2; # real success
+						}else{
+							$success = -1; # failed
+							$self->_handle_api_error();
+							if($self->{'mw_api'}->{'error'}->{'code'} =~ /\b3\b/ and 
+								$self->{'mw_api'}->{'error'}->{'details'} =~ /assertbotfailed|Assertion .* failed/){
+								# restart bot
+								$self->login();
+							}
+							sleep(5 * $num_tries);
+						}
+					}
 				}else{
+					$success = 0; # user said: no
 					$self->{'user_answer'} = '';
 				}
 			}else{
@@ -2377,7 +2393,7 @@ sub syntaxCheck{
 				$self->msg(1, "simulation of saving of page [[$page]] with summary '$summary'");
 			}
 		}
-		return 1;
+		return $success;
 	}
 
 	sub show_diff{
@@ -3005,23 +3021,33 @@ sub syntaxCheck{
 			$text = \$text_ if defined $text_;
 		}
 		if(defined $text or not defined $page){
-			my %intros = (
-				'ASIN' => "dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet, die mind. eine [[Amazon Standard Identification Number|ASIN]] enthalten.\n
-CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass in einem artikel eine ASIN steht, meldet er das nach ca. 30 minuten hier auf dieser seite. auch das loeschen von eintraegen, die keine ASIN mehr enthalten, uebernimmt CamelBot.\n
-== liste ==\n",
-				'cat dead' => "dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet, die der category ''gestorben " . (strftime('%Y', gmtime())) . "'' hinzugefuegt wurden.\n
-CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass ein artikel dieser category hinzugefuegt wird, meldet er das nach ca. 30 minuten hier auf dieser seite. dabei fuegt er gefundene artikel nur der liste hinzu. loeschen muss man manuell.\n
-== liste ==\n",
-				'local files' => "dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet, die mind. eine relative adresse auf die festplatte enthalten.\n
-CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass in einem artikel eine solche adresse steht, meldet er das nach ca. 30 minuten hier auf dieser seite. auch das loeschen von eintraegen, die keine solche adresse mehr enthalten, uebernimmt CamelBot.\n
-== liste ==\n",
-				'finanznachrichten.de' => "dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet, die mind. einen verweis auf finanznachrichten.de enthalten.\n
-CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass sich in einem artikel ein verweis auf jene domain befindet, meldet er das nach ca. 30 minuten hier auf dieser seite. auch das loeschen von eintraegen, die einen solchen verweis nicht mehr enthalten, uebernimmt CamelBot.\n
-== liste ==\n",
-				'traditionsverband.de' => "dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet, die mind. einen verweis auf traditionsverband.de enthalten.\n
-CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass sich in einem artikel ein verweis auf jene domain befindet, meldet er das nach ca. 30 minuten hier auf dieser seite. auch das loeschen von eintraegen, die einen solchen verweis nicht mehr enthalten, uebernimmt CamelBot.\n
-== liste ==\n",
+			my %i_parts = (
+				'intro' => 'dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet',
+				'general' => 'CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden.',
+				'condition_link' => 'faellt ihm dabei auf, dass sich in einem artikel ein verweis auf jene domain befindet',
+				'action' => 'meldet er das nach ca. 30 minuten hier auf dieser seite',
+				'deleting_link' => 'auch das loeschen von eintraegen, die einen solchen verweis nicht mehr enthalten, uebernimmt CamelBot.',
+				'list_section' => "== liste ==\n",
 			);
+			my %intros = (
+				'ASIN' => "$i_parts{'intro'}, die mind. eine [[Amazon Standard Identification Number|ASIN]] enthalten.\n\n" . 
+					"$i_parts{'general'} faellt ihm dabei auf, dass in einem artikel eine ASIN steht, $i_parts{'action'}. " . 
+					"auch das loeschen von eintraegen, die keine ASIN mehr enthalten, uebernimmt CamelBot.\n\n" . 
+					"$i_parts{'list_section'}",
+				'cat dead' => "$i_parts{'intro'}, die der category ''gestorben " . (strftime('%Y', gmtime())) . "'' hinzugefuegt wurden.\n\n" . 
+					"$i_parts{'general'} faellt ihm dabei auf, dass ein artikel dieser category hinzugefuegt wird, $i_parts{'action'}. " . 
+					"dabei fuegt er gefundene artikel nur der liste hinzu. loeschen muss man manuell.\n\n" . 
+					"$i_parts{'list_section'}",
+				'local files' => "$i_parts{'intro'}, die mind. eine relative adresse auf die festplatte enthalten.\n\n" . 
+					"$i_parts{'general'} faellt ihm dabei auf, dass in einem artikel eine solche adresse steht, $i_parts{'action'}. " . 
+					"auch das loeschen von eintraegen, die keine solche adresse mehr enthalten, uebernimmt CamelBot.\n\n" . 
+					"$i_parts{'list_section'}",
+			);
+			for my $domain('finanznachrichten.de', 'traditionsverband.de'){
+				$intros{$domain} = "$i_parts{'intro'}, die mind. einen verweis auf $domain enthalten.\n\n" .
+					"$i_parts{'general'} $i_parts{'condition_link'}, $i_parts{'action'}. " . 
+					"$i_parts{'deleting_link'}\n\n$i_parts{'list_section'}";
+			}
 			for my $mt_type(keys %{$self->{'maintenance'}->{'text_re'}}){
 				if(($type eq $mt_type or $type eq 'all_types') and 
 					(not defined $page or $$text =~ /$self->{'maintenance'}->{'text_re'}->{$mt_type}/)
