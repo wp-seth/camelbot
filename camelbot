@@ -251,6 +251,7 @@ use POSIX qw/strftime/;       # format timestamp
 #
 # sub title2url_part
 # 	convert article name to part of url with article name
+# 	'w t f' => 'w_t_f'
 #
 # sub update_edit_filter_index
 # 	update page with index of present threads about edit filters
@@ -301,7 +302,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.42.20160309';
+$main::VERSION = '1.43.20160313';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -433,9 +434,9 @@ sub syntaxCheck{
 	use MediaWiki::Bot;         # bot for mediawiki, uses mediawiki-api-interface
 	use POSIX qw/strftime/;     # format timestamp
 	unless($_running_on_labs){
-		require Term::ReadKey;          # used for user input
+		require Term::ReadKey;    # used for user input
 		require Text::Diff;
-		require Tk::DiffText;          # graphical diff tool
+		require Tk::DiffText;     # graphical diff tool
 		#Term::ReadKey->import(qw());
 	}
 	use Time::Local;            # timegm
@@ -2821,7 +2822,7 @@ sub syntaxCheck{
 		my $self  = shift;
 		my $title = shift;
 		utf8::encode($title);
-		$title =~s/ /_/g;
+		$title =~ s/ /_/g;
 		my $url = $self->{'mw_apiurl'};
 		$url =~ s/api\.php$/index.php?title=/;
 		$url .= uri_escape($title);
@@ -2831,7 +2832,7 @@ sub syntaxCheck{
 	sub title2url_part{
 		my $self = shift;
 		my $title = shift;
-		$title =~s/ /_/g;
+		$title =~ s/ /_/g;
 		my $url_part = uri_escape($title);
 		return $url_part;
 	}
@@ -4405,7 +4406,7 @@ same as B<--verbose=1>.
 
 =head1 LICENCE
 
-Copyright (c) 2015, seth
+Copyright (c) 2016, seth
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
