@@ -2381,6 +2381,7 @@ sub syntaxCheck{
 								# restart bot
 								$self->login();
 							}
+							$self->msg(0, "saving page failed (trying again: num_tries = $num_tries) ", 'error');
 							sleep(5 * $num_tries);
 						}
 					}
