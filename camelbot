@@ -302,7 +302,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.43.20160313';
+$main::VERSION = '1.44.20160314';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -2973,16 +2973,22 @@ sub syntaxCheck{
 		my $new_entry = defined $page ? "[[$page]]" : undef;
 		$table->{'body'} = [grep {
 				my $page_content = '';
+				my $found;
 				if(defined $new_entry and $_->[0] eq $new_entry){
 					$self->msg(1, "page '$page' already in list");
 					$already_in_list = 1;
+					$found = 1;
 				}elsif($_->[0] =~ /^\[\[(.*)\]\]$/){
 					my $page_from_list = $1;
+					$self->msg(4, "check '$page_from_list'");
 					$page_content = $self->{'mw_bot'}->get_text($page_from_list) // ''; # may be deleted meanwhile
+					$found = $page_content =~ /$self->{'maintenance'}->{'text_re'}->{$mt_type}/;
+					unless($found){
+						$self->msg(4, "regexp did not match");
+					}
 				}
 				# return value for grep
-				$page_content =~ /$self->{'maintenance'}->{'text_re'}->{$mt_type}/ 
-					or $already_in_list;
+				$found;
 			} @{$table->{'body'}}
 		];
 		# add new list entry
@@ -3759,6 +3765,7 @@ my $camelbot = CamelBot->new({
 });
 
 # used for debugging only:
+#my $camelbot_rc = CamelBotRC->new($camelbot);
 #my $text = $camelbot->{'mw_bot'}->get_text("T\xe4cks");
 #my $changes = $camelbot->cleanup_wiki_page(\$text, 'moep');
 #print Dumper $changes;
