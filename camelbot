@@ -113,6 +113,9 @@ use POSIX qw/strftime/;       # format timestamp
 # sub get_abuse_filter_info
 # 	return some info on abuse filter rules
 #
+# sub get_all_pages
+# 	return all pages that match a given pattern
+#
 # sub get_diff
 # 	a more detailed version of MediaWiki::Bot::diff
 #
@@ -302,7 +305,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.44.20160314';
+$main::VERSION = '1.45.20160326';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -342,23 +345,27 @@ sub syntaxCheck{
 		'diff-to'            => undef, # version to diff to
 		'delete'             => 0,     # delete pages
 		'download-by-prefix' => undef, # download pages by prefix
+		'file'               => undef, # a file for text-replacement
 		'http-status'        => undef, # check reachability of url
 		'link-replacement'   => 0,     # link replacing
 		'minor'              => 1,     # mark as minor
 		'parse'              => undef, # wikitext-file to parse
+		'search-pattern'     => undef, # text replacing regexp pattern
 		'rc-monitoring'      => undef, # start rc monitoring via irc or db
+		'use-eval'           => 0,     # use eval on text-replacement
 		'save-as-html'       => undef, # download pages and save as html pages
 		'search-sbl-attempts' => undef, # search the sbl log of blocked edits
 		'section'            => undef, # section in wikipage
-		'text-replacement'   => 0,     # text replacing
-		'udest'              => undef, # destination filename
+		'text-replacement'   => undef, # text replacing
+		'dest'               => undef, # destination filename
 		'update-editfilter-index' => 0,# update edit filter index in w:de
 		'upload'             => 0,     # upload a file
 		'usercontribs'       => 0,     # fetch user contributions
 		'username'           => $ENV{'USER'}, # user name
-		'usource'            => undef, # source filename
-		'usummary'           => undef, # summary/description
-		'wikipage'           => undef, # wikipage
+		'source'             => undef, # source filename
+		'summary'            => undef, # summary/description
+		'wikipage'           => undef, # wikipage (single page)
+		'wikipages'          => undef, # wikipages (regexp)
 		'test'               => 0,     # show result only (without renaming)
 		'verbose'            => 1,     # trace; grade of verbosity
 		'version'            => 0,     # diplay version and exit
@@ -374,24 +381,28 @@ sub syntaxCheck{
 		'diff-to=s',
 		'delete',
 		'download-by-prefix=s',
+		'file=s',
 		'http-status=s',
 		'irc' => sub { $params{'rc-monitoring'} = 'irc';},
 		'link-replacement|l',
 		'minor!',
 		'parse=s',
 		'rc-monitoring=s',
+		'use-eval',
 		'save-as-html=s',
+		'search-pattern=s',
 		'search-sbl-attempts=s',
 		'section=s',
 		'text-replacement',
-		'udest=s',
+		'dest|udest=s',
 		'update-editfilter-index',
 		'upload',
 		'usercontribs|usercontributions',
 		'username=s',
-		'usource=s',
-		'usummary=s',
+		'source|usource=s',
+		'summary|usummary=s',
 		'wikipage=s',
+		'wikipages=s',
 		'test|t',
 		'silent|quiet|q' => sub { $params{'verbose'} = 0;},
 		'very-verbose' => sub { $params{'verbose'} = 2;},
@@ -646,40 +657,42 @@ sub syntaxCheck{
 		my $text     = shift; # ref to string
 		my $page     = shift;
 		my $changes = {};
+		my $use_eval_in_repl = 1;
 		if(defined $text and ref $text eq 'SCALAR' and defined $$text){
 			# == link fixes ==
 			# === double protocol ===
 			$changes->{'double protocol'} = $self->test_and_replace($text, 
 				qr/(?:(?:http:|(?<=\[))\/\/)+(https?):?\/\/($self->{'re_url_rear'})/m, 
-				'"$1:\/\/$2"');
+				'"$1:\/\/$2"', $use_eval_in_repl);
 			# === missing/too much brackets ===
 			# <ref>[http://www.example.org</ref>
+			#  was '"$1\x5b$2]$3"' until 2015-07-18, but deleting of such brackets seems more convenient
 			$changes->{'wrong left bracket'} = $self->test_and_replace($text, 
 				qr/(<ref>)\s*\[\s*(https?:\/\/$self->{'re_url_rear'})[\s.]*+(<\/ref>)/m, 
-				'"$1$2$3"'); # was '"$1\x5b$2]$3"' until 2015-07-18, but deleting of such brackets seems more convenient
+				'"$1$2$3"', $use_eval_in_repl); 
 			# <ref>http://www.example.org]</ref>
 			$changes->{'wrong right bracket'} = $self->test_and_replace($text, 
 				qr/(<ref>)\s*(https?:\/\/$self->{'re_url_rear'})\s*+]\s*(<\/ref>)/m, 
-				'"$1$2$3"'); # see above
+				'"$1$2$3"', $use_eval_in_repl); # see above
 			# === checking of spelling/typography ===
 			$changes->{'abk..'} = $self->test_and_replace($text, 
 				qr/ (?:Chr|e\.(?: |&nbsp;)?V|ff|Jh|usw)\.\K\. /m, 
-				'" "');
+				' ', !$use_eval_in_repl);
 			$changes->{'abk.. in links'} = $self->test_and_replace($text, 
 				qr/\.\]\]\K\./m, 
-				'""');
+				'', !$use_eval_in_repl);
 			$changes->{'%ig'} = $self->test_and_replace($text, 
 				qr/[0-9]\K(?: |&nbsp;)?%-ig/m, 
-				'"%ig"');
+				'%ig', !$use_eval_in_repl);
 			$changes->{'°C ([[WP:SVZ]])'} = $self->test_and_replace($text, 
 				qr/°\K(?: |&nbsp;|&thinsp;)C/m, 
-				'"C"');
+				'C', !$use_eval_in_repl);
 			#$changes->{"whitespace nach gestorben-symbol"} = $self->test_and_replace($text, 
 			#	qr/\x{2020}\K(?! |&nbsp;)/m, 
 			#	'" "');
 			$changes->{"whitespace vor ref-tag"} = $self->test_and_replace($text, 
 				qr/(?<![|=°])(?<!<\/sup>)(?<!\}\})(?: |&(?:nbsp|thinsp);)(?=<ref\b)/m, 
-				'""'); # \n will lead to false positives
+				'', !$use_eval_in_repl); # \n will lead to false positives
 			# + }} because of false positive: //de.wikipedia.org/w/index.php?title=Griechische_Staatsschuldenkrise&diff=143759791&oldid=143757358
 			# === specific domains ===
 			# see [https://de.wikipedia.org/w/index.php?title=MediaWiki_Diskussion:
@@ -688,33 +701,33 @@ sub syntaxCheck{
 			$changes->{'lf denkmalschutz.de'} = $self->test_and_replace($text, 
 				qr/http:\/\/www.denkmalschutz.de\/$self->{'re_url_class'}+?\K
 				&cHash=[0-9a-f]+/mx, 
-				'""',);
+				'', !$use_eval_in_repl);
 			# == optional fixes==
 			if(scalar(grep {$_>0} values %$changes) > 0){
 				# === unicode character 0x200e before categories ===
 				$changes->{'u200e'} = $self->test_and_replace($text, 
 					qr/\x{200e}(?=\]\]|\}\}|\|)/m, 
-					'""');
+					'', !$use_eval_in_repl);
 				# === superfluous space in cats ===
 				$changes->{'superfluous space in cats'} = $self->test_and_replace($text, 
 					qr/\[\[Kategorie:\K +/m, 
-					'""');
+					'', !$use_eval_in_repl);
 				# === superfluous declaration as tamplate via keyword ===
 				$changes->{'superfluous "template"'} = $self->test_and_replace($text, 
 					qr/\{\{\K[Vv]orlage:/m, 
-					'""');
+					'', !$use_eval_in_repl);
 				# === wrong html br-tag ===
 				$changes->{'wrong br-tag'} = $self->test_and_replace($text, 
 					qr/<(?:[\/\\]br\s*|br[.\\])>/m, 
-					'"<br \/>"');
+					'<br />', !$use_eval_in_repl);
 				# === superfluous br-tag ===
 				$changes->{'superfluous br-tag'} = $self->test_and_replace($text, 
 					qr/^\*.*\K<(?:[\/\\]br\s*|br ?[.\\\/])> *$/m, 
-					'""');
+					'', !$use_eval_in_repl);
 				# === wrong white space before '%' ===
 				$changes->{'white space before %; see [[WP:SVZ]]'} = $self->test_and_replace($text, 
 					qr/&(?:nbsp|thinsp|#x202f|#8239);%/m, 
-					'" %"');
+					' %', !$use_eval_in_repl);
 				# === technically superfluous external links ===
 				if($page ne 'Hypertext Transfer Protocol Secure' and 
 					 $page ne 'Hypertext_Transfer_Protocol_Secure'){
@@ -725,22 +738,23 @@ sub syntaxCheck{
 								(?:\x23(?!mediaviewer)[^\]|\x20?]+)?)\s
 							([^\]]+)
 						\]{1,2}/mx, 
-						'"[[".$self->url2title($1).($self->url2title($1) eq $2 ? "" : "|$2")."]]"'
+						'"[[".$self->url2title($1).($self->url2title($1) eq $2 ? "" : "|$2")."]]"', 
+						$use_eval_in_repl
 					);
 				}
 				# === redundant internal link description ===
 				$changes->{'redundant link description'} = $self->test_and_replace($text, 
 					qr/\[\[\s*+([^|\]\[]+\S)\s*\|\s*+\1\s*+\]\]/m, 
-					'"[[$1]]"');
+					'"[[$1]]"', $use_eval_in_repl);
 				# === zeros ===
 				$changes->{'zeros'} = $self->test_and_replace($text, 
 					qr/((?:\{\{0\}\}){2,})/m, 
-					'"{{0|" . ("0"x(length($1)/5)) . "}}"');
+					'"{{0|" . ("0"x(length($1)/5)) . "}}"', $use_eval_in_repl);
 			}
 			# === tests ===
 			#$self->test_and_replace($text, 
 			#		qr/seth sagt: hallo camelbot!/m, 
-			#		'"camelbot sagt: hallo seth!"');
+			#		'camelbot sagt: hallo seth!', !$use_eval_in_repl);
 		}else{
 			$self->msg(0, '$$text is not defined', 'warning');
 			return $changes;
@@ -1277,6 +1291,33 @@ sub syntaxCheck{
 		return \@results;
 	}
 
+	sub get_all_pages{
+		my $self    = shift;
+		my $pattern = shift;
+		my $query = {
+			'action'    => 'query',
+			'list'      => 'allpages', 
+			'aplimit'   => '500', 
+		};
+		my $mw_options = {'max' => 1};
+		my %list_of_articles;
+		my $pages = [];
+		my $die_on_error = 1; # 0 = dont die; 1 = die
+		my $finished = 0;
+		while(!$finished){
+			(my $tmp, $finished) = $self->api_cont($query, $mw_options, !$die_on_error);
+			my $allpages = $tmp->{'query'}->{'allpages'};
+			if(defined $allpages){
+				for my $ap(@$allpages){
+					next if exists $list_of_articles{$ap->{'title'}} or $ap->{'title'} !~ /$pattern/;
+					$list_of_articles{$ap->{'title'}} = 1;
+					push @$pages, $ap->{'title'};
+				}
+			}
+		}
+		return $pages;
+	}
+
 	sub decode_html_entities{
 		my $self = shift;
 		my $text = shift;
@@ -1606,6 +1647,7 @@ sub syntaxCheck{
 			'num_ns0_links'  => 0,
 			'num_ns!0_links' => 0,
 		);
+		my $use_eval_in_repl = 1;
 
 		if($options{'articles'}){
 			$self->msg(1, "starting linksearch in ns=0...");
@@ -1667,7 +1709,7 @@ sub syntaxCheck{
 					#	$self->test_and_replace(
 					#		\$text, 
 					#		qr/$re_prot_part$re_url_part(?<trail>$self->{'re_url_class'}*)(?:(?<posturl>.*?)$re_deadlink)?/m, 
-					#		$replacement, 
+					#		$replacement, $use_eval_in_repl
 					#	);
 				}elsif($options{'delete_link'}){
 					if($options{'refs'}){
@@ -1686,7 +1728,8 @@ sub syntaxCheck{
 											<\/ref>                       # <\/ref>
 										)/x,
 									'"${1}[{{dead link|inline=yes|bot=' . $self->{'mw_username'} . 
-									'|date=' . $self->get_date_iso() . '|url=$2}}$3]$4"'
+									'|date=' . $self->get_date_iso() . '|url=$2}}$3]$4"', 
+									$use_eval_in_repl
 								);
 							}
 						}else{
@@ -1697,14 +1740,14 @@ sub syntaxCheck{
 								$self->test_and_replace(
 									\$text, 
 									qr/<(?i:ref) name\s*=\s*['"]?\s*$ref_name\s*['"]?\s*\/\s*>/, 
-									'""', 
+									'', !$use_eval_in_repl
 								);
 							}
 							# refs
 							$self->test_and_replace(
 								\$text, 
 								qr/<(?i:ref)\b[^>]*>\s*$re_ref_inner_part/, 
-								'""', 
+								'', !$use_eval_in_repl
 							);
 						}
 					}
@@ -1715,7 +1758,7 @@ sub syntaxCheck{
 							\$text_tmp, 
 							qr/^=(=+)\s*(?:Einzelnachweise|Quellen)\s*\1=[\s\n]*\n
 							<references(?:\x20?\/)?>\s*/mx, 
-							'""', 
+							'', !$use_eval_in_repl
 						);
 						my $parsed = $self->parse_wikitext($text_tmp);
 						if($parsed !~ /class="error mw-ext-cite-error"/){
@@ -1723,7 +1766,7 @@ sub syntaxCheck{
 								\$text, 
 								qr/^=(=+)\s*(?:Einzelnachweise|Quellen)\s*\1=[\s\n]*\n
 								<references(?:\x20?\/)?>\s*/mx, 
-								'""', 
+								'', !$use_eval_in_repl
 							);
 						}else{
 							$self->msg(1, '<references /> not deleted, because it would lead ' .
@@ -1735,13 +1778,13 @@ sub syntaxCheck{
 						$self->test_and_replace(
 							\$text, 
 							qr/^\*(?i:.(?!<ref))*\[$re_url*?\s*$re_descr_class*\].*\n?/m, 
-							'""', 
+							'', !$use_eval_in_repl
 						);
 						# plain links in lists (as in "external links")
 						$self->test_and_replace(
 							\$text, 
 							qr/^\*(?i:.(?!<ref))*$re_url*?.*\n?/m, 
-							'""', 
+							'', !$use_eval_in_repl
 						);
 					}
 					# heading "weblinks" without entries
@@ -1750,7 +1793,7 @@ sub syntaxCheck{
 							(?:Coordinate|DEFAULTSORT|Hinweis\x20|(?:Vorlage:)?Navigations
 								|Normdaten|(?:Vorlage:)?Orden,|SORTIERUNG)
 							|(?:<!--\x20?)?==)/mx;
-					$self->test_and_replace(\$text, $weblinks_heading_re, '"$2"');
+					$self->test_and_replace(\$text, $weblinks_heading_re, '"$2"', $use_eval_in_repl);
 					if($text =~ /(.*(?<!\|url=$re_prot_part)$re_url_part.*)/){
 						$self->msg(1, " not resolved: $1");
 					}
@@ -1794,30 +1837,37 @@ sub syntaxCheck{
 					#	$self->test_and_replace(
 					#		\$text, 
 					#		qr/$re_prot_part$re_url_part(?<trail>$self->{'re_url_class'}*)(?:(?<posturl>.*?)$re_deadlink)?/m, 
-					#		$replacement, 
+					#		$replacement, $use_eval_in_repl
 					#	);
 				}elsif($options{'delete_link'}){
 					if($options{'nonrefs'}){
 						# [link]
 						$self->test_and_replace(\$text, 
-							qr/\[$re_prot_part($re_url_part$self->{'re_url_class'}*?)\]/, '$1');
+							qr/\[$re_prot_part($re_url_part$self->{'re_url_class'}*?)\]/, 
+							'$1', $use_eval_in_repl);
 						# [link descr]
 						$self->test_and_replace(\$text, 
-							qr/(?<!<nowiki>)(\[$re_url*\s*$re_descr_class*\])/, '"<nowiki>".$1."<\/nowiki>"');
+							qr/(?<!<nowiki>)(\[$re_url*\s*$re_descr_class*\])/, 
+							'"<nowiki>".$1."<\/nowiki>"', $use_eval_in_repl);
 						# plain_link or word:plainlink
 						$self->test_and_replace(\$text, 
-							qr/(?<!$self->{'re_url_class'})(?<!<nowiki>\[)([a-zA-Z0-9]*:|)$re_prot_part($re_url_part$self->{'re_url_class'}*)/, '$1.$2');
+							qr/(?<!$self->{'re_url_class'})(?<!<nowiki>\[)([a-zA-Z0-9]*:|)$re_prot_part($re_url_part$self->{'re_url_class'}*)/, 
+							'$1.$2', $use_eval_in_repl);
 						# ==plain_link==
 						$self->test_and_replace(\$text, 
-							qr/^(=+) *$re_prot_part($re_url_part$self->{'re_url_class'}*) *\1 */m, '$1." ".$2." ".$1');
+							qr/^(=+) *$re_prot_part($re_url_part$self->{'re_url_class'}*) *\1 */m, 
+							'$1." ".$2." ".$1', $use_eval_in_repl);
 						# :*plain_link
 						$self->test_and_replace(\$text, 
-							qr/^([:\s*]*)$re_prot_part($re_url_part$self->{'re_url_class'}*)/m, '$1.$2');
+							qr/^([:\s*]*)$re_prot_part($re_url_part$self->{'re_url_class'}*)/m, 
+							'$1.$2', $use_eval_in_repl);
 						# (plain_link)
 						$self->test_and_replace(\$text, 
-							qr/([()]\s*)$re_prot_part($re_url_part$self->{'re_url_class'}*)(\s*\)|\s)/, '$1.$2.$3');
+							qr/([()]\s*)$re_prot_part($re_url_part$self->{'re_url_class'}*)(\s*\)|\s)/, 
+							'$1.$2.$3', $use_eval_in_repl);
 	#					# {|plain_link|}
-	#					$self->test_and_replace(\$text, qr/([|{]\s*)$re_prot_part($re_url_part$self->{'re_url_class'}*)(\s*[|}])/, '$1.$2.$3');
+	#					$self->test_and_replace(\$text, qr/([|{]\s*)$re_prot_part($re_url_part$self->{'re_url_class'}*)(\s*[|}])/, 
+	#					'$1.$2.$3', $use_eval_in_repl);
 					}
 					# not good for large pages:
 					if($text =~ /^(.*(?<!<nowiki>)(?<!<nowiki>\[)$re_prot_part$re_url_part.*)/m){
@@ -2345,7 +2395,6 @@ sub syntaxCheck{
 		my $success = 1; # no change or just simulation
 		if($$text ne $$orig_text){
 			my $user_answer_diff;
-			# comment the following 3 lines if no X/tk is available.
 			if(defined $self->{'showdiff'} and $self->{'showdiff'} > 0){
 				$user_answer_diff = $self->show_diff($text, $orig_text);
 			}
@@ -2693,13 +2742,14 @@ sub syntaxCheck{
 		my $text     = shift;
 		my $regexp_s = shift;
 		my $regexp_r = shift;
+		my $use_eval_replacement = shift;
 		my $strpos = 0;
 		my $array_of_changes = [];
 		$self->msg(3, "   ".$regexp_s);
-		my $numChanges = $$text=~s/$regexp_s/
+		my $numChanges = $$text =~ s/$regexp_s/
 			my $match = ${^MATCH};
 			my $prematch = ${^PREMATCH};
-			my $replaced = eval($regexp_r);
+			my $replaced = $use_eval_replacement ? eval($regexp_r) : $regexp_r;
 			# cope with links
 			if(!$self->check_external_link(\$prematch, \$replaced)){
 				$replaced = $match;
@@ -2750,18 +2800,20 @@ sub syntaxCheck{
 
 	sub text_replacement{
 		my $self       = shift;
+		my $pages      = shift; # pages to search
+		my $section    = shift; # section to use
+		my $patterns   = shift; # patterns to search s/X//
+		my $repls      = shift; # replacing texts s//X/(e)
 		my $params     = shift;
-		my $pages      = $params->{'pages'};        # pages to search
-		my $patterns   = $params->{'pattern'};      # patterns to search s/X//
-		my $repls      = $params->{'replacement'};  # replacing texts s//X/e
+		my $use_eval_in_repl = shift;
 		my $max_edits  = $params->{'max_edits'};
 		my $skip_edits = $params->{'skip_edits'};
 		my $summary    = $params->{'summary'};
 		$self->msg(1, "loop over pages and replace text");
 		my $edit_counter = -1;
-		if(@$patterns == 0+@$repls){
+		if(@$patterns == 0 + @$repls){
 			for my $page(@$pages){
-				if(++$edit_counter < $skip_edits or $max_edits == 0){
+				if(++$edit_counter < $skip_edits){
 					next;
 				}elsif($edit_counter >= $max_edits and $max_edits != -1){
 					last;
@@ -2777,17 +2829,50 @@ sub syntaxCheck{
 					next;
 				}
 				my $text_bak = $text;
-				$self->cleanup_wiki_page(\$text, $page);
+				#$self->cleanup_wiki_page(\$text, $page);
+				my $text_to_use;
+				my @split_text;
+				my $section_found;
+				if(defined $section){
+					my $i = 0;
+					@split_text = grep {++$i % 3} split /^((=+)(?!=).+(?<!=)\2(?:\n|\z))/m, $text;
+					# 0, 2, 4, ... = text
+					# 1, 3, 5, ... = headings
+					my $section_num = -1;
+					for($i = 1; $i < @split_text; $i+=2){
+						if($split_text[$i] =~ /^(=+)\s*$section\s*\1$/){
+							$section_num = $i;
+							last;
+						}
+					}
+					if($section_num == -1){
+						$self->msg(0, 'could not find section in page', 'error');
+					}else{
+						$self->msg(1, "found find section '$section' in page '$page'");
+					}
+					#my $text2 = join '', @split_text;
+					#map {$_ = substr($_, 0, 100)} @split_text;
+					#print Dumper \@split_text;
+					$text_to_use = \$split_text[$section_num + 1];
+				}else{
+					$text_to_use = \$text;
+				}
 				my $found = 0;
-				for(my $i=0; $i<@$patterns; ++$i){
-					if($self->test_and_replace(\$text, $patterns->[$i], $repls->[$i]) > 0){
+				for(my $i = 0; $i < @$patterns; ++$i){
+					if($self->test_and_replace($text_to_use, $patterns->[$i], $repls->[$i], 
+							$use_eval_in_repl) > 0){
 						++$found;
 					}
+				}
+				if(defined $section){
+					$text = join '', @split_text;
 				}
 				$self->msg(2, "  $found replacements");
 				$self->time_management();
 				$self->save_wiki_page($page, $summary, \$text, \$text_bak);
 			}
+		}else{
+			$self->msg(0, 'number of patterns and number of replacements differ', 'error');
 		}
 	}
 
@@ -4007,7 +4092,34 @@ if(defined $params->{'search-sbl-attempts'}){
 	}
 }
 
-if($params->{'text-replacement'}){
+if(defined $params->{'text-replacement'}){
+	my $use_eval = $params->{'use-eval'};
+	my $pages = [];
+	if(defined $params->{'wikipages'}){
+		$pages = $camelbot->get_all_pages(qr/$params->{'wikipages'}/);
+	}
+	if(defined $params->{'wikipage'}){
+		utf8::decode($params->{'wikipage'});
+		push @$pages, $params->{'wikipage'};
+	}
+	my $pattern = [qr/(?s:^.*$)/];
+	my $replacement = [];
+	if(defined $params->{'search-pattern'}){
+		$pattern = [qr/$params->{'search-pattern'}/];
+	}
+	if(defined $params->{'file'}){
+		my $file_content = slurp $params->{'file'};
+		utf8::decode($file_content);
+		$replacement = [$file_content];
+	}elsif(@$replacement == 0){
+		my $file_content = '';
+		$camelbot->msg(1, 'reading replacement text from STDIN');
+		while(<STDIN>){
+			$file_content .= $_;
+		};
+		utf8::decode($file_content);
+		$replacement = [$file_content];
+	}
 	my %options;
 # choose pages
 # by user
@@ -4017,29 +4129,27 @@ if($params->{'text-replacement'}){
 	#$options{'uclimit'}       = 269;
 	#$options{'pages'}         = [keys %{$camelbot->get_user_contribs(\%options)}];
 # by whatlinkshere
-	use utf8;
-	$options{'pages'} = [
-		map {$_->{'title'}} (
-			$camelbot->{'mw_bot'}->what_links_here('Perl/Module/Einführung in Perl-Module'),
-			$camelbot->{'mw_bot'}->what_links_here('Perl/Module/Einführung in Perl-Modul'),
-			$camelbot->{'mw_bot'}->what_links_here('Perl/Module/Hinweise zum Arbeiten mit Modulen'),
-			$camelbot->{'mw_bot'}->what_links_here('Perl/Listen bzw. Arrays (Variablen)'),
-			$camelbot->{'mw_bot'}->what_links_here('Perl/Hashes (Variablen)'),
-			$camelbot->{'mw_bot'}->what_links_here('Doku:Perl/Module/CPAN-Module'),
-			$camelbot->{'mw_bot'}->what_links_here('Perl/Skalare (Variablen)'),
-		)
-	];
+	#use utf8;
+	#$pages = [
+	#	map {$_->{'title'}} (
+	#		$camelbot->{'mw_bot'}->what_links_here('Perl/Module/Einführung in Perl-Module'),
+	#		$camelbot->{'mw_bot'}->what_links_here('Perl/Module/Einführung in Perl-Modul'),
+	#		$camelbot->{'mw_bot'}->what_links_here('Perl/Module/Hinweise zum Arbeiten mit Modulen'),
+	#		$camelbot->{'mw_bot'}->what_links_here('Perl/Listen bzw. Arrays (Variablen)'),
+	#		$camelbot->{'mw_bot'}->what_links_here('Perl/Hashes (Variablen)'),
+	#		$camelbot->{'mw_bot'}->what_links_here('Doku:Perl/Module/CPAN-Module'),
+	#		$camelbot->{'mw_bot'}->what_links_here('Perl/Skalare (Variablen)'),
+	#	)
+	#];
 # or explicite
-	#$options{'pages'} = [
+	#$pages = [
 	#	'Perl',
 	#	'Perl Dingens',
 	#];
-
-	print Dumper $options{'pages'};
-
+	print Dumper $pages if $params->{'verbose'} > 2;
 # search and replace
 #  case 0: link replacement
-	#$options{'pattern'} = [
+	#$pattern = [
 	#	qr/<nowiki>(http:\/\/world.guns.ru\b[^\]]*?\].*?)<\/nowiki>&nbsp;<small>'''\(Achtung: Bitte diese Website nicht aufrufen, da sie gef.hrliche Software verbreitet!\)'''<\/small>/,
 	#	qr/<nowiki>(http:\/\/world.guns.ru\b.*?)<\/nowiki>&nbsp;<small>'''\(Achtung: Bitte diese Website nicht aufrufen, da sie gef.hrliche Software verbreitet!\)'''<\/small>/,
 	#	qr/(?<!\[)(http:\/\/world.guns.ru\b[^ \]]* [^\[\]]+\])/,
@@ -4051,7 +4161,7 @@ if($params->{'text-replacement'}){
 	#	qr/(?<!\[)(http:\/\/world.guns.ru\b[^ \]]*),/,
 	#	qr/(?<!\[)(http:\/\/world.guns.ru\b[^ \]]*)/,
 	#]; # search patterns s/X//
-	#$options{'replacement'}   = [
+	#$replacement   = [
 	#	'"[".$1',
 	#	'$1',
 	#	'"[".$1',
@@ -4064,30 +4174,41 @@ if($params->{'text-replacement'}){
 	#	'"[".$1."]"',
 	#];   # replace texts s//X/e
 #  case 1: internal linkfixes
-	$options{'pattern'}       = [
-		qr/\[\[Perl\/Module\/Standardmodule\K[_ ]von[_ ]Perl/,
-		qr/\[\[Perl\/Module\/Einführung[_ ]in[_ ]Perl-Module?/,
-		qr/\[\[Perl\/Module\/Hinweise[_ ]zum[_ ]Arbeiten[_ ]mit[_ ]Modulen/,
-		qr/\[\[Doku:Perl\/Module\/CPAN-Module/,
-		qr/\[\[Perl\/Skalare\K[_ ]\(Variablen\)/,
-		qr/\[\[Perl\/Hashes\K[_ ]\(Variablen\)/,
-		qr/\[\[Perl\/Listen[_ ]bzw\.[_ ]Arrays\K[_ ]\(Variablen\)/,
-	]; # search patterns s/X//
-	$options{'replacement'}   = [
-		"''",
-		"'[[Perl/Module/Einführung'",
-		"'[[Perl/Module/Einführung'",
-		"'[[Perl/Module/Einführung'",
-		"''",
-		"''",
-		"''",
-	]; # replace texts s//X/e
+	#$pattern = [
+	#	qr/\[\[Perl\/Module\/Standardmodule\K[_ ]von[_ ]Perl/,
+	#	qr/\[\[Perl\/Module\/Einführung[_ ]in[_ ]Perl-Module?/,
+	#	qr/\[\[Perl\/Module\/Hinweise[_ ]zum[_ ]Arbeiten[_ ]mit[_ ]Modulen/,
+	#	qr/\[\[Doku:Perl\/Module\/CPAN-Module/,
+	#	qr/\[\[Perl\/Skalare\K[_ ]\(Variablen\)/,
+	#	qr/\[\[Perl\/Hashes\K[_ ]\(Variablen\)/,
+	#	qr/\[\[Perl\/Listen[_ ]bzw\.[_ ]Arrays\K[_ ]\(Variablen\)/,
+	#]; # search patterns s/X//
+	#$replacement = [
+	#	"''",
+	#	"'[[Perl/Module/Einführung'",
+	#	"'[[Perl/Module/Einführung'",
+	#	"'[[Perl/Module/Einführung'",
+	#	"''",
+	#	"''",
+	#	"''",
+	#]; # replace texts s//X/e
 
-	# edit behaviour
-	$options{'max_edits'}     = -1;  # maximum number of edits (-1 = inf)
-	$options{'skip_edits'}    = 0;  # skip number of pages
-	$options{'summary'}       = 'linkfixes (grmpf utf-8-gedoens)';
-	$camelbot->text_replacement(\%options);
+	print Dumper $pattern if $params->{'verbose'} > 2;
+	print Dumper $replacement if $params->{'verbose'} > 2;
+	if(@$pages > 0){
+		if(defined $params->{'summary'}){
+			$options{'max_edits'}     = -1; # maximum number of edits (-1 = inf)
+			$options{'skip_edits'}    = 0;  # skip number of pages
+			$options{'summary'}       = $params->{'summary'};
+			utf8::decode($params->{'section'});
+			$camelbot->text_replacement(
+				$pages, $params->{'section'}, $pattern, $replacement, \%options, $use_eval);
+		}else{
+			$camelbot->msg(0, "missing param 'summary'. see --help", 'error');
+		}
+	}else{
+		$camelbot->msg(0, "no pages to be edited.", 'warning');
+	}
 }
 
 if($params->{'update-editfilter-index'}){
@@ -4118,9 +4239,9 @@ if($params->{'update-table'}){
 }
 
 if($params->{'upload'}){
-	my $source  = $params->{'usource'};
-	my $summary = $params->{'usummary'};
-	my $dest    = $params->{'udest'};
+	my $source  = $params->{'source'};
+	my $summary = $params->{'summary'};
+	my $dest    = $params->{'dest'};
 	die "error in upload: source file not defined!\n" unless defined $source;
 	die "error in upload: file '$source' not found!\n" unless -e $source;
 	die "error in upload: summary not defined!\n" unless defined $summary;
@@ -4157,6 +4278,8 @@ be used to just retrieve information on a MediaWiki.
 
 camelbot [options]
 
+(there are no mandatory options, only mandatory sub-options)
+
 general options:
 
      --http-status=s           check http status of given url
@@ -4185,7 +4308,17 @@ mediawiki/wikipedia commands:
      --download-by-prefix=s    download pages (and used images) with given prefix
      --irc                     short for --rc-monitoring=irc
  -l, --link-replacement        replaces links 
-     --text-replacement        replaces text 
+     --text-replacement        replaces text in given wiki pages by regexp or by 
+                                given file
+       --file=s                 use content of this file as replacement, i.e., as 
+                                 new text
+       --search-pattern=s       use this perl-style regexp to search a pattern to be
+                                 replaced
+       --section=s              use this section in wiki page (e.g. 'own packages')
+       --summary=s              a summary of the edit (mandatory)
+       --use-eval               use eval on replacement text (default = no eval)
+       --wikipage=s             use this wiki page (e.g. 'page')
+       --wikipages=s            use these wiki pages by regexp (e.g. 'page[0-9]')
  -m, --minor=[01]              mark edit(s) as minor (1) or not (0), default = 1
      --parse=s                 parses wikitext from file and saves result as new 
                                 file
@@ -4205,10 +4338,10 @@ mediawiki/wikipedia commands:
      --upload                  upload a file
                                iff this param is set, you should additionally set 
                                the following params, too.
-       --usource=s              source filename (e.g. '../somefile.txt')
-       --usummary=s             a summary/description of the file
+       --source=s               source filename (e.g. '../somefile.txt')
+       --summary=s              a summary/description of the file
                                  (e.g. "robot cat with hat\\n\\n[[Category:Nonsense]]")
-       --udest=s                destination filename (e.g. 'a_descriptive_name.txt')
+       --dest=s                 destination filename (e.g. 'a_descriptive_name.txt')
      --usercontribs            fetch user contributions
 
 meta options:
@@ -4344,7 +4477,51 @@ don't change anything, just print possible changes.
 
 =item B<--text-replacement>
 
-replace content of pages
+replace content of B<--section> of pages or whole pages. you may choose be a regular
+expression (via B<--search-pattern>) which part to be replaced. the new text may 
+be the content of a given B<--file>.
+
+=over 8
+
+=item B<--file>=I<filename>
+
+the content of this file will be used as replacement.
+
+=item B<--search-pattern>=I<regexp>
+
+I<regexp> is a perl-style search pattern that will be raplaced. 
+
+default = (?s:^.*$)
+
+handle with care. it's always recommended to B<--test> before using.
+
+=item B<--section>=I<string>
+
+use this section in wiki page (e.g. 'some funny section').
+
+=item B<--summary>=I<string>
+
+a one-line summary of the edit (e.g. "inserted ultimate theory")
+
+=item B<--use-eval>
+
+use eval() on replacement text. normally the text will be replaced literally.
+if B<--use-eval> is set, the replacement will be treated like
+
+	replace /pattern/ by eval(replacement)
+
+so if replacement contains something like $1, this will be treated as a 
+back-reference, if B<--use-eval> is set.
+
+=item B<--wikipage>=I<string>
+
+use this wiki page (e.g. 'User:CamelBot/Something').
+          
+=item B<--wikipages>=I<string>
+
+use these wiki pages given by perl-style regexp (e.g. 'page[0-9]+').
+          
+=back
 
 =item B<--update-editfilter-index>
 
@@ -4355,20 +4532,21 @@ update overview of discussions concerning single rules of edit filter (in w:de)
 upload a file iff this param is set, you should additionally set the following 
 params, too.
 
-=item B<--usource>=I<string>
+=over 8
 
-requires B<--upload> to be set.
+=item B<--source>=I<string>
+
 source filename (e.g. '../somefile.txt')
 
-=item B<--usummary>=I<string>
+=item B<--summary>=I<string>
 
-requires B<--upload> to be set.
 a summary/description of the file (e.g. "robot cat with hat\\n\\n[[Category:Nonsense]]")
 
-=item B<--udest>=I<string>
+=item B<--dest>=I<string>
 
-requires B<--upload> to be set.
 destination filename (e.g. 'a_descriptive_name.txt')
+
+=back
 
 =item B<--username=>I<string>
 
