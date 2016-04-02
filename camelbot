@@ -308,7 +308,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.46.20160401';
+$main::VERSION = '1.46.20160403';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -3430,6 +3430,9 @@ sub syntaxCheck{
 		if(defined $pages){
 			for my $dataset(@$pages){
 				$dataset->{'page'} =~ s/_/ /g;
+				$dataset->{'full_page_title'} = $dataset->{'namespace'} == 0 ? '' : 
+					$self->convert_ns($dataset->{'namespace'}) . ':';
+				$dataset->{'full_page_title'} .= $dataset->{'page'};
 				$dataset->{'category'} =~ s/_/ /g;
 			}
 			if($self->{'camelbot'}{'verbosity'} >= 2 or @$pages > 50){
@@ -3503,32 +3506,41 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 		}
 		# get old table content
 		my $table = $camelbot->wikitable2array(\$wikitable);
+		# number of additional (ignored/unchanged) columns
 		my $num_add_cols = @{$table->{'header'}} - 3;
 		$camelbot->msg(1, "number of additional cols = $num_add_cols");
-		# rebuild table: check all old entries; remove entries if possible;
 		# search new entry, if not in array, then push
+		my @added_pages;
 		for my $page(@$pages){
-			my $new_entry = "[[$page->{'page'}]]";
+			my $new_entry = "[[$page->{'full_page_title'}]]";
 			if(grep {
 					$_->[0] eq $new_entry and $_->[1] eq $page->{'category'}
 				} @{$table->{'body'}}
 			){
-				$camelbot->msg(1, "page '$page->{'page'}' already in list");
+				$camelbot->msg(1, "page '$page->{'full_page_title'}' already in list");
 				next;
 			}else{ # add to list
-				$camelbot->msg(1, "add new list entry '$page->{'page'}'");
+				$camelbot->msg(1, "add new list entry '$page->{'full_page_title'}'");
 				# if table has more than 3 columns, then pad each row
 				my @empty_cells = split //, (' ' x $num_add_cols);
-				push @{$table->{'body'}}, [$new_entry, $page->{'category'}, $camelbot->get_date_iso(), @empty_cells];
+				push @{$table->{'body'}}, [
+					$new_entry, 
+					$page->{'category'}, 
+					$camelbot->get_date_iso(), 
+					@empty_cells
+				];
+				push @added_pages, "$page->{'full_page_title'} ($page->{'category'})";
 			}
 		}
+		my $summary = @added_pages = 0 ? 'update maintenance list' : 
+			'added ' . join(', ', @added_pages);
 		my $full_auto = 1;
 		# convert array to wikitable
 		$wikitable = $camelbot->table2wikitext($table, !$full_auto);
 		# rebuild page, i.e., put pieces together and save
 		$ml_text = $intro . $wikitable . $outro;
 		$camelbot->time_management();
-		$camelbot->save_wiki_page($ml, 'update maintenance list', \$ml_text, \$ml_text_bak);
+		$camelbot->save_wiki_page($ml, $summary, \$ml_text, \$ml_text_bak);
 		return 1;
 	}
 
@@ -3743,8 +3755,8 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			my %dbl_counter;
 			$new_entries = [reverse
 				grep {
-					$dbl_counter{$_->{'page'}} = (exists $dbl_counter{$_->{'page'}}) ? 0 : 1;
-					$dbl_counter{$_->{'page'}};
+					$dbl_counter{$_->{'full_page_title'}} = (exists $dbl_counter{$_->{'full_page_title'}}) ? 0 : 1;
+					$dbl_counter{$_->{'full_page_title'}};
 				} sort {$b->{'cl_timestamp'} cmp $a->{'cl_timestamp'}} @$new_entries
 			];
 			if(@$new_entries > 0 and
@@ -3764,7 +3776,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 			}
 			# step 2: restore those elements that are not handled already
 			for my $edge_article(@edge_articles){
-				unless(grep {$_->{'page'} eq $edge_article->{'page'}} @edge_articles_bak){
+				unless(grep {$_->{'full_page_title'} eq $edge_article->{'full_page_title'}} @edge_articles_bak){
 					push @$new_entries, $edge_article;
 					push @edge_articles_bak, $edge_article;
 				}
