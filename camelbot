@@ -123,6 +123,15 @@ use POSIX qw/strftime/;       # format timestamp
 #		get ref to an array of hashes, where each hash represents an external link and 
 #		one page where it's used
 #
+# sub get_page_info
+# 	get information about a given page (or given pages)
+#
+# sub get_pages
+#   get wikipages
+#
+# sub get_pages_by_prefix
+# 	get all pages and their latest content by prefix
+#
 # sub get_pages_of_cat_of_dead_via_db
 #		get ref to an array of hashes, where each hash represents a category and 
 #		one page where it's used
@@ -132,12 +141,6 @@ use POSIX qw/strftime/;       # format timestamp
 #
 # sub get_namespace_id
 # 	return namespace id of a given page
-#
-# sub get_page_info
-# 	get information about a given page (or given pages)
-#
-# sub get_pages_by_prefix
-# 	get all pages and their latest content by prefix
 #
 # sub get_sbl_entries
 # 	get all sbl entries of a given wiki
@@ -305,7 +308,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.45.20160326';
+$main::VERSION = '1.46.20160401';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -346,6 +349,7 @@ sub syntaxCheck{
 		'delete'             => 0,     # delete pages
 		'download-by-prefix' => undef, # download pages by prefix
 		'file'               => undef, # a file for text-replacement
+		'get-page'           => undef, # get a page
 		'http-status'        => undef, # check reachability of url
 		'link-replacement'   => 0,     # link replacing
 		'minor'              => 1,     # mark as minor
@@ -382,6 +386,7 @@ sub syntaxCheck{
 		'delete',
 		'download-by-prefix=s',
 		'file=s',
+		'get-page|g',
 		'http-status=s',
 		'irc' => sub { $params{'rc-monitoring'} = 'irc';},
 		'link-replacement|l',
@@ -444,14 +449,28 @@ sub syntaxCheck{
 	use LWP::UserAgent;         # fast, small web browser
 	use MediaWiki::Bot;         # bot for mediawiki, uses mediawiki-api-interface
 	use POSIX qw/strftime/;     # format timestamp
-	unless($_running_on_labs){
+	my %_loaded_mod;
+	$_loaded_mod{'Term::ReadKey'} = eval{
 		require Term::ReadKey;    # used for user input
-		require Text::Diff;
+		Term::ReadKey->import();
+		1;
+	};
+	$_loaded_mod{'Text::Diff'} = eval{
+		require Text::Diff;       # timegm
+		Text::Diff->import();
+		1;
+	};
+	$_loaded_mod{'Tk::DiffText'} = eval{
 		require Tk::DiffText;     # graphical diff tool
-		#Term::ReadKey->import(qw());
-	}
+		Tk::DiffText->import();
+		1;
+	};
 	use Time::Local;            # timegm
-	use URI::Escape;            # uri_unescape
+	$_loaded_mod{'URI::Escape'} = eval{
+		require URI::Escape;      # uri_escape, uri_unescape
+		URI::Escape->import();
+		1;
+	};
 
 	sub new{
 		my $class = shift;
@@ -461,6 +480,8 @@ sub syntaxCheck{
 			# 0 = don't ask user; 1  = ask user for every action
 			'ask_user'       => $params->{'ask_user'} // 0, 
 			'db'             => {'file' => $params->{'db_access'}}, 
+			'host'           => $params->{'host'} // 'de.wikipedia.org', 
+			'rel_url_path'   => $params->{'rel_url_path'} // 'w', 
 			# maximum number of edits per minute (-1 = inf)
 			'max_edits_per_min' => $params->{'max_edits_per_min'} // 5, 
 			'minor'          => $params->{'minor'} // 1, # 0 = non-minor; 1 = minor
@@ -563,7 +584,7 @@ sub syntaxCheck{
 		# TODO: 1. fill in params; 2. test
 		my $email_address = '';
 		map {
-			my $encoded_url = uri_escape($_);
+			my $encoded_url = $self->uri_escape($_);
 			my $url = 'https://web.archive.org/save/' . $_;
 			#$self->msg(2, $url);
 			$self->check_external_link(\'', \$url);
@@ -1240,30 +1261,39 @@ sub syntaxCheck{
 		my $prefix  = shift;
 		my @prefix_pages = grep {!$_->{'redirect'} and $_ = $_->{'title'}} 
 			$self->{'mw_bot'}->prefixindex($prefix);
-		die "error: no pages found with prefix '$prefix}'.\n" if @prefix_pages==0;
-		my $page_texts = $self->{'mw_bot'}->get_pages(\@prefix_pages);
-		if($self->{'verbosity'} >= 1){
-			map {$self->msg(1, "getting '$_'")} sort keys %$page_texts;
+		my $success = 1;
+		if(@prefix_pages == 0){
+			$self->msg(0, "no pages found with prefix '$prefix'", 'warning');
+			$success = 0;
+		}else{
+			my $page_texts = $self->{'mw_bot'}->get_pages(\@prefix_pages);
+			if($self->{'verbosity'} >= 1){
+				map {$self->msg(1, "getting '$_'")} sort keys %$page_texts;
+			}
+			my $no_warn_files = [];
+			my $files_prefix = '';
+			while(my ($title, $text) = each %$page_texts){
+				$title = $self->title2filename($title).'.wikitext';
+				$self->msg(2, "saving '$title'");
+				if(-e $title){
+					$self->msg(0, "file '$title' exists already", 'error');
+					$success = 0;
+					last;
+				}
+				write_file($title, {binmode => ':utf8'}, $text);
+				my @images = $text =~ /
+					\[\[
+						(?:[fF]ile|[iI]mage|[mM]edia):
+						(
+							(?:
+								(?!\]\])
+								[^|]
+							)*
+						)/xg;
+				$self->download_files(\@images, $no_warn_files, $files_prefix);
+			}
 		}
-		my $no_warn_files = [];
-		my $files_prefix = '';
-		while(my ($title, $text) = each %$page_texts){
-			$title = $self->title2filename($title).'.wikitext';
-			$self->msg(2, "saving '$title'");
-			die "error: file '$title' exists already\n" if -e $title;
-			write_file($title, {binmode => ':utf8'}, $text);
-			my @images = $text=~/
-				\[\[
-					(?:[fF]ile|[iI]mage|[mM]edia):
-					(
-						(?:
-							(?!\]\])
-							[^|]
-						)*
-					)/xg;
-			$self->download_files(\@images, $no_warn_files, $files_prefix);
-		}
-		return 1;
+		return $success;
 	}
 
 	sub get_abuse_filter_info{
@@ -1385,6 +1415,48 @@ sub syntaxCheck{
 			$page_infos->{$page_info->{'title'}} = $page_info;
 		}
 		return $page_infos;
+	}
+
+	sub get_pages{
+		# similar to sub text_replacement
+		my $self    = shift;
+		my $pages   = shift; # wiki pages to get
+		my $section = shift; # section to use
+		my $contents = [];
+		for my $page(@$pages){
+			$self->msg(2, "page = '$page'");
+			my $text = $self->{'mw_bot'}->get_text($page);
+			unless(defined $text){
+				$self->msg(0, "page content of '$page' not defined", 'warning');
+				next;
+			}
+			my @split_text;
+			if(defined $section){
+				my $i = 0;
+				@split_text = grep {++$i % 3} split /^((=+)(?!=).+(?<!=)\2(?:\n|\z))/m, $text;
+				# 0, 2, 4, ... = text
+				# 1, 3, 5, ... = headings
+				my $section_num = -1;
+				for($i = 1; $i < @split_text; $i+=2){
+					if($split_text[$i] =~ /^(=+)\s*$section\s*\1$/){
+						$section_num = $i;
+						last;
+					}
+				}
+				if($section_num == -1){
+					$self->msg(1, 'could not find section in page', 'warning');
+				}else{
+					$self->msg(2, "found find section '$section' in page '$page'");
+				}
+				$text = $split_text[$section_num + 1];
+			}
+			push @$contents, {
+				'page'    => $page,
+				'section' => $section,
+				'content' => $text,
+			};
+		}
+		return $contents;
 	}
 
 	sub get_pages_by_prefix{
@@ -1959,14 +2031,11 @@ sub syntaxCheck{
 		}
 		my %address_params = (
 			'protocol' => 'https',
-			# wiki dependent
-			'host'     => 'de.wikipedia.org',
-			'path'     => 'w',
-			#'host'     => 'wiki.selfhtml.org',
-			#'path'     => 'mediawiki',
+			'host'     => $self->{'host'},
+			'path'     => $self->{'rel_url_path'},
 		);
-		$self->msg(2, "logging in at $address_params{'host'}...");
-		if($address_params{'host'} =~ /^([a-z]+)\.(
+		$self->msg(2, "logging in at $self->{'host'}...");
+		if($self->{'host'} =~ /^([a-z]+)\.(
 				wikibooks|wikidata|wikimedia|wikinews|wikipedia|wikiquote|
 				wikisource|wikiversity|wikivoyage|wiktionary
 			)\.org\z/x){
@@ -2811,7 +2880,9 @@ sub syntaxCheck{
 		my $summary    = $params->{'summary'};
 		$self->msg(1, "loop over pages and replace text");
 		my $edit_counter = -1;
+		my $success = 0;
 		if(@$patterns == 0 + @$repls){
+			$success = 1;
 			for my $page(@$pages){
 				if(++$edit_counter < $skip_edits){
 					next;
@@ -2822,17 +2893,18 @@ sub syntaxCheck{
 				my $text = $self->{'mw_bot'}->get_text($page);
 				unless(defined $text){
 					$self->msg(0, "page content not defined", 'error');
+					$success = 0;
 					next;
 				}
 				if(not $self->is_allowed(\$text, $page)){
 					$self->msg(2, "  not allowed");
+					$success = 0;
 					next;
 				}
 				my $text_bak = $text;
 				#$self->cleanup_wiki_page(\$text, $page);
 				my $text_to_use;
 				my @split_text;
-				my $section_found;
 				if(defined $section){
 					my $i = 0;
 					@split_text = grep {++$i % 3} split /^((=+)(?!=).+(?<!=)\2(?:\n|\z))/m, $text;
@@ -2847,6 +2919,8 @@ sub syntaxCheck{
 					}
 					if($section_num == -1){
 						$self->msg(0, 'could not find section in page', 'error');
+						$success = 0;
+						next;
 					}else{
 						$self->msg(1, "found find section '$section' in page '$page'");
 					}
@@ -2869,11 +2943,12 @@ sub syntaxCheck{
 				}
 				$self->msg(2, "  $found replacements");
 				$self->time_management();
-				$self->save_wiki_page($page, $summary, \$text, \$text_bak);
+				$success = $success && $self->save_wiki_page($page, $summary, \$text, \$text_bak);
 			}
 		}else{
 			$self->msg(0, 'number of patterns and number of replacements differ', 'error');
 		}
+		return $success;
 	}
 
 	sub time_management{
@@ -2911,7 +2986,7 @@ sub syntaxCheck{
 		$title =~ s/ /_/g;
 		my $url = $self->{'mw_apiurl'};
 		$url =~ s/api\.php$/index.php?title=/;
-		$url .= uri_escape($title);
+		$url .= $self->uri_escape($title);
 		return $url;
 	}
 
@@ -2919,7 +2994,7 @@ sub syntaxCheck{
 		my $self = shift;
 		my $title = shift;
 		$title =~ s/ /_/g;
-		my $url_part = uri_escape($title);
+		my $url_part = $self->uri_escape($title);
 		return $url_part;
 	}
 
@@ -3208,11 +3283,37 @@ sub syntaxCheck{
 		}
 	}
 
+	sub uri_escape{
+		my $self    = shift;
+		my $url     = shift;
+		my $escaped = $url;
+		if($_loaded_mod{'URI::Escape'}){
+			$escaped = uri_escape($url);
+		}else{
+			$self->msg(0, 'function uri_escape not available. ' . 
+				'please check installation of perl module URI::Escape', 'error');
+		}
+		return $escaped;
+	}
+
+	sub uri_unescape{
+		my $self    = shift;
+		my $url     = shift;
+		my $unescaped = $url;
+		if($_loaded_mod{'URI::Escape'}){
+			$unescaped = uri_unescape($url);
+		}else{
+			$self->msg(0, 'function uri_unescape not available. ' . 
+				'please check installation of perl module URI::Escape', 'error');
+		}
+		return $unescaped;
+	}
+
 	sub url2title{
 		my $self   = shift;
 		my $url    = shift;
 		$url =~ /^(?:https?:\/\/$self->{'wm_lang'}\.$self->{'wm_proj_type'}\.org\/wiki\/)?(.*)/;
-		my $article_name = uri_unescape($1);
+		my $article_name = $self->uri_unescape($1);
 		$article_name =~s/_/ /g;
 		# 2014-12-23, seth: "https://de.wikipedia.org/wiki/K%C3%B6nigliche_und_barmherzige_Vereinigung_der_Ordens-_und_Medaillentr%C3%A4ger_von_Belgien" became: "KÃ¶nigliche und barmherzige Vereinigung der Ordens- und MedaillentrÃ¤ger von Belgien"
 		utf8::decode($article_name);
@@ -3838,16 +3939,18 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 # main
 my $params = syntaxCheck(@ARGV);
 my $camelbot = CamelBot->new({
-	'ask_user'    => 0,
+	'ask_user'      => 0,
 	'max_edits_per_min' => 5,
-	'minor'       => $params->{'minor'},
-	'mw_username' => $params->{'username'}, 
-	#'mw_password' => undef, 
-	'simulation'  => $params->{'test'},
-	'showdiff'    => 0,
-	'verbosity'   => $params->{'verbose'},
-	'db_access'   => $params->{'db-access'},
-	'cliparams'   => $params,
+	'minor'         => $params->{'minor'},
+	'mw_username'   => $params->{'username'}, 
+	#'mw_password'  => undef, 
+	#'host'         => 'wiki.selfhtml.org',
+	#'rel_url_path' => 'mediawiki',
+	'simulation'    => $params->{'test'},
+	'showdiff'      => 0,
+	'verbosity'     => $params->{'verbose'},
+	'db_access'     => $params->{'db-access'},
+	'cliparams'     => $params,
 });
 
 # used for debugging only:
@@ -3916,6 +4019,25 @@ if($params->{'diff-from'}){
 
 if(defined $params->{'download-by-prefix'}){
 	$camelbot->download_pages_by_prefix($params->{'download-by-prefix'});
+}
+
+if(defined $params->{'get-page'}){
+	my $pages = [];
+	if(defined $params->{'wikipages'}){
+		$pages = $camelbot->get_all_pages(qr/$params->{'wikipages'}/);
+	}
+	if(defined $params->{'wikipage'}){
+		utf8::decode($params->{'wikipage'});
+		push @$pages, $params->{'wikipage'};
+	}
+	$camelbot->msg(3, Dumper($pages));
+	if(@$pages > 0){
+		utf8::decode($params->{'section'});
+		my $pages_content = $camelbot->get_pages($pages, $params->{'section'});
+		print Dumper $pages_content if $params->{'verbose'} > 0;
+	}else{
+		$camelbot->msg(0, "no pages to be edited.", 'warning');
+	}
 }
 
 if(defined $params->{'http-status'}){
@@ -4040,7 +4162,7 @@ if($params->{'rc-monitoring'}){
 if(defined $params->{'save-as-html'}){
 	my ($html, $title, $headhtml) = $camelbot->parse_page($params->{'save-as-html'});
 	# set html title
-	$headhtml=~s/<title>\K[^<]+(?=<\/title>)/$title/;
+	$headhtml =~ s/<title>\K[^<]+(?=<\/title>)/$title/;
 	# delete js and other useless stuff
 	$headhtml =~ s/<script\b[^>]*>.*?<\/script>//gs;
 	$headhtml =~ s/<link rel="(?:search|alternate|EditURI|shortcut icon)" [^>]+>//g;
@@ -4283,7 +4405,6 @@ camelbot [options]
 general options:
 
      --http-status=s           check http status of given url
-                                (status 200 or 301)
  -t, --test                    don't change anything, just print possible changes
 
 mediawiki/wikipedia login:
@@ -4294,20 +4415,30 @@ mediawiki/wikipedia login:
 
 mediawiki/wikipedia commands:
 
+  passive commands in order to get pages:
+
+     --diff-from=s             revision id to get a diff from
+     --diff-to=s               revision id (or 'prev' or 'next') to get a diff to
+     --download-by-prefix=s    download pages (and used images) with given prefix
+ -g, --get-page                get one or wiki pages, print to stdout
+       --section=s              get this section in wiki page (e.g. 'some section')
+       --wikipage=s             get this wiki page (e.g. 'some page')
+       --wikipages=s            get these wiki pages by regexp (e.g. 'page[0-9]')
+     --save-as-html=s          saves a given wiki page as local html-file
+  
+  other commands:
+
      --archive-ext-links=s     save external links at archive.org, using db
                                 param is of format 
                                   'from_id=...;to_id=...;file=...;'
                                 (syntax may change in future)
      --cat-add                 add a given bunch of pages to a given category
- -c, --cat-change              replaces categories 
+ -c, --cat-change              replaces pre-defined categories
      --cat-dead                check recent changes (in dewiki) for additions of 
                                 categories of (recently) died people
      --delete                  delete some pre-defined pages
-     --diff-from=s             revision id to get a diff from
-     --diff-to=s               revision id (or 'prev' or 'next') to get a diff to
-     --download-by-prefix=s    download pages (and used images) with given prefix
      --irc                     short for --rc-monitoring=irc
- -l, --link-replacement        replaces links 
+ -l, --link-replacement        replaces pre-defined links 
      --text-replacement        replaces text in given wiki pages by regexp or by 
                                 given file
        --file=s                 use content of this file as replacement, i.e., as 
@@ -4325,7 +4456,6 @@ mediawiki/wikipedia commands:
      --rc-monitoring=s         start monitoring of recent changes (in dewiki) via
                                 irc - an irc bot
                                 db  - an db connection
-     --save_as_html=s          saves a given wiki page as local html-file
      --search-sbl-attempts=s   search the list of blocked edits (blocked by sbl) 
                                 for a given url-regexp or for a complete given sbl.
                                 this may search in several wikis.
@@ -4334,13 +4464,13 @@ mediawiki/wikipedia commands:
                                 e.g. 'regexp=evil-?domain\.;proj=enwiki;' or
                                 e.g. 'proj=enwiki;sbl=meta;'
                                 (syntax may change in future)
-     --update-editfilter-index update edit filter index (at w:de)
+     --update-editfilter-index update edit filter index (at dewiki)
      --upload                  upload a file
                                iff this param is set, you should additionally set 
                                the following params, too.
        --source=s               source filename (e.g. '../somefile.txt')
        --summary=s              a summary/description of the file
-                                 (e.g. "robot cat with hat\\n\\n[[Category:Nonsense]]")
+                                 (e.g. "robot cat with hat\n\n[[Category:Nonsense]]")
        --dest=s                 destination filename (e.g. 'a_descriptive_name.txt')
      --usercontribs            fetch user contributions
 
@@ -4417,6 +4547,26 @@ see B<--diff-from>
 
 download pages by given prefix and save the pages wieth the extension '.wikitext'.
 all images used in those pages will be downloaded too.
+
+=item B<--get-page>
+
+get text of a B<--wikipage> or some B<--wikipages> or a B<--section> of each page.
+
+=over 8
+
+=item B<--section>=I<string>
+
+get this section in wiki page (e.g. 'some funny section').
+
+=item B<--wikipage>=I<string>
+
+use this wiki page (e.g. 'User:CamelBot/Something').
+          
+=item B<--wikipages>=I<string>
+
+use these wiki pages given by perl-style regexp (e.g. 'page[0-9]+').
+          
+=back
 
 =item B<--http-status>=I<string>
 
@@ -4508,7 +4658,7 @@ a one-line summary of the edit (e.g. "inserted ultimate theory")
 use eval() on replacement text. normally the text will be replaced literally.
 if B<--use-eval> is set, the replacement will be treated like
 
-	replace /pattern/ by eval(replacement)
+  replace /pattern/ by eval(replacement)
 
 so if replacement contains something like $1, this will be treated as a 
 back-reference, if B<--use-eval> is set.
