@@ -3532,7 +3532,7 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 				push @added_pages, "$page->{'full_page_title'} ($page->{'category'})";
 			}
 		}
-		my $summary = @added_pages = 0 ? 'update maintenance list' : 
+		my $summary = @added_pages == 0 ? 'update maintenance list' : 
 			'added ' . join(', ', @added_pages);
 		my $full_auto = 1;
 		# convert array to wikitable
