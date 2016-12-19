@@ -308,7 +308,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.47.20160618';
+$main::VERSION = '1.48.20161219';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -456,7 +456,7 @@ sub syntaxCheck{
 		1;
 	};
 	$_loaded_mod{'Text::Diff'} = eval{
-		require Text::Diff;       # timegm
+		require Text::Diff;       # diff
 		Text::Diff->import();
 		1;
 	};
@@ -584,7 +584,7 @@ sub syntaxCheck{
 		# TODO: 1. fill in params; 2. test
 		my $email_address = '';
 		map {
-			my $encoded_url = $self->uri_escape($_);
+			my $encoded_url = $self->uri_escaper($_);
 			my $url = 'https://web.archive.org/save/' . $_;
 			#$self->msg(2, $url);
 			$self->check_external_link(\'', \$url);
@@ -1370,7 +1370,7 @@ sub syntaxCheck{
 		if($response->is_success){
 			$content = $response->decoded_content;
 		}else{
-			$self->msg->(0, $response->status_line, 'error');
+			$self->msg(0, $response->status_line, 'error');
 		}
 		return ($response->code, $content);
 	}
@@ -2986,7 +2986,7 @@ sub syntaxCheck{
 		$title =~ s/ /_/g;
 		my $url = $self->{'mw_apiurl'};
 		$url =~ s/api\.php$/index.php?title=/;
-		$url .= $self->uri_escape($title);
+		$url .= $self->uri_escaper($title);
 		return $url;
 	}
 
@@ -2994,7 +2994,7 @@ sub syntaxCheck{
 		my $self = shift;
 		my $title = shift;
 		$title =~ s/ /_/g;
-		my $url_part = $self->uri_escape($title);
+		my $url_part = $self->uri_escaper($title);
 		return $url_part;
 	}
 
@@ -3283,7 +3283,7 @@ sub syntaxCheck{
 		}
 	}
 
-	sub uri_escape{
+	sub uri_escaper{
 		my $self    = shift;
 		my $url     = shift;
 		my $escaped = $url;
