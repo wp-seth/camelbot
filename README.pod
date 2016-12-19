@@ -1,39 +1,90 @@
 =head1 NAME
 
-camelbot manipulates wiki pages
+camelbot manipulates or gets information from wiki pages
 
 =head1 DESCRIPTION
 
-this program is a CLI tool for manipulation pages of a MediaWiki. One of the main 
-tasks is the replacement of external links (urls)
+this program is a CLI tool for automatic editing of MediaWiki pages. one of the 
+main tasks is the replacement of external links (urls). furthermore this tool can 
+be used to just retrieve information on a MediaWiki.
 
 =head1 SYNOPSIS
 
 camelbot [options]
 
+(there are no mandatory options, only mandatory sub-options)
+
 general options:
 
- -c, --cat-change              replaces categories 
-     --delete                  delete some pre-defined pages
+     --http-status=s           check http status of given url
+ -t, --test                    don't change anything, just print possible changes
+
+mediawiki/wikipedia login:
+
+     --db-access=s             filename of file containing database access data, 
+                                i.e., host, port, user and password
+     --username=s              login as different user (default = shell login name)
+
+mediawiki/wikipedia commands:
+
+  passive commands in order to get pages:
+
+     --diff-from=s             revision id to get a diff from
+     --diff-to=s               revision id (or 'prev' or 'next') to get a diff to
      --download-by-prefix=s    download pages (and used images) with given prefix
-     --irc                     start irc bot (for w:de)
- -l, --link-replacement        replaces links 
-     --text-replacement        replaces text 
+ -g, --get-page                get one or wiki pages, print to stdout
+       --section=s              get this section in wiki page (e.g. 'some section')
+       --wikipage=s             get this wiki page (e.g. 'some page')
+       --wikipages=s            get these wiki pages by regexp (e.g. 'page[0-9]')
+     --save-as-html=s          saves a given wiki page as local html-file
+  
+  other commands:
+
+     --archive-ext-links=s     save external links at archive.org, using db
+                                param is of format 
+                                  'from_id=...;to_id=...;file=...;'
+                                (syntax may change in future)
+     --cat-add                 add a given bunch of pages to a given category
+ -c, --cat-change              replaces pre-defined categories
+     --cat-dead                check recent changes (in dewiki) for additions of 
+                                categories of (recently) died people
+     --delete                  delete some pre-defined pages
+     --irc                     short for --rc-monitoring=irc
+ -l, --link-replacement        replaces pre-defined links 
+     --text-replacement        replaces text in given wiki pages by regexp or by 
+                                given file
+       --file=s                 use content of this file as replacement, i.e., as 
+                                 new text
+       --search-pattern=s       use this perl-style regexp to search a pattern to be
+                                 replaced
+       --section=s              use this section in wiki page (e.g. 'own packages')
+       --summary=s              a summary of the edit (mandatory)
+       --use-eval               use eval on replacement text (default = no eval)
+       --wikipage=s             use this wiki page (e.g. 'page')
+       --wikipages=s            use these wiki pages by regexp (e.g. 'page[0-9]')
  -m, --minor=[01]              mark edit(s) as minor (1) or not (0), default = 1
      --parse=s                 parses wikitext from file and saves result as new 
                                 file
-     --save_as_html=s          saves a given wiki page as local html-file
- -t, --test                    don't change anything, just print possible changes
-     --update-editfilter-index update edit filter index (at w:de)
+     --rc-monitoring=s         start monitoring of recent changes (in dewiki) via
+                                irc - an irc bot
+                                db  - an db connection
+     --search-sbl-attempts=s   search the list of blocked edits (blocked by sbl) 
+                                for a given url-regexp or for a complete given sbl.
+                                this may search in several wikis.
+                                param is of format 
+                                  'regexp=...;proj=...;sbl=...;'
+                                e.g. 'regexp=evil-?domain\.;proj=enwiki;' or
+                                e.g. 'proj=enwiki;sbl=meta;'
+                                (syntax may change in future)
+     --update-editfilter-index update edit filter index (at dewiki)
      --upload                  upload a file
                                iff this param is set, you should additionally set 
                                the following params, too.
-       --usource=s              source filename (e.g. '../somefile.txt')
-       --usummary=s             a summary/description of the file
-                                 (e.g. "robot cat with hat\\n\\n[[Category:Nonsense]]")
-       --udest=s                destination filename (e.g. 'a_descriptive_name.txt')
+       --source=s               source filename (e.g. '../somefile.txt')
+       --summary=s              a summary/description of the file
+                                 (e.g. "robot cat with hat\n\n[[Category:Nonsense]]")
+       --dest=s                 destination filename (e.g. 'a_descriptive_name.txt')
      --usercontribs            fetch user contributions
-     --username=s              login as different user (default = shell login name)
 
 meta options:
 
@@ -59,22 +110,84 @@ camelbot -cl
 
 =over 8
 
+=item B<--archive-ext-links>=I<string>
+
+save external links at archive.org, using db. param is of format 
+ 'from_id=...;to_id=...;file=...;'
+
+=item B<--cat-add>
+
+add a given bunch of pages to a given category.
+
 =item B<--cat-change>, B<-c>
 
 replaces categories 
 
+=item B<--cat-dead>
+
+check recent changes (in dewiki) for additions of categories of (recently) died 
+people
+
+=item B<--db-access=I<filename>>
+
+if you are lucky and have database access to the mediawiki db, then camelbot will 
+try to make use of this database. just provide the I<filename> (default = 
+'replica.my.cnf') of a file containing something like
+ user='your name'
+ password='your password'
+ port='e.g. 3306'
+ host='e.g. 127.0.0.1'
+
 =item B<--delete>
 
 delete some pre-defined pages
+
+=item B<--diff-from>=I<string>
+
+returns diff of two revisions of a wiki page to stdout. If I<string> is a number, 
+it's treated as a page revision. If it's not a number, it's treated as a page title
+and the newest revision is used.
+
+should be combined with B<--diff-to>=I<string>, where a second revision number or 
+'prev' (default) or 'next' can be given to choose a revision to diff to.
+
+=item B<--diff-to>=I<string>
+
+see B<--diff-from>
 
 =item B<--download-by-prefix>=I<string>
 
 download pages by given prefix and save the pages wieth the extension '.wikitext'.
 all images used in those pages will be downloaded too.
 
+=item B<--get-page>
+
+get text of a B<--wikipage> or some B<--wikipages> or a B<--section> of each page.
+
+=over 8
+
+=item B<--section>=I<string>
+
+get this section in wiki page (e.g. 'some funny section').
+
+=item B<--wikipage>=I<string>
+
+use this wiki page (e.g. 'User:CamelBot/Something').
+          
+=item B<--wikipages>=I<string>
+
+use these wiki pages given by perl-style regexp (e.g. 'page[0-9]+').
+          
+=back
+
+=item B<--http-status>=I<string>
+
+prints the http response status code of a given URL I<string>. If I<string> 
+contains spaces, they are treated as separators between multiple URLs.
+
 =item B<--irc>
 
-start an irc bot. this will only be useful in de-wikipedia.
+same as B<--rc-monitoring>=irc
 
 =item B<--link-replacement>, B<-l>
 
@@ -89,10 +202,36 @@ mark edit(s) as minor or not, default = B<--minor>.
 parses wikitext from file and saves result to file with same name but with 
 extension .html.
 
+=item B<--rc-monitoring>=I<type>
+
+start monitoring of recent changes (in de-wikipedia) via an irc bot (I<type>==irc) 
+or a db (I<type>==db) connection to a "real time" db.
+
 =item B<--save-as-html>=I<pagename>
 
 parses wikitext of given page and saves result to file with same name but with 
 extension .html.
+
+=item B<--search-sbl-attempts>=I<string>
+
+search the log of edits blocked by sbl for a given url-regexp I<string> or all 
+entries of a given spam-blacklist (sbl). may search several wikis.
+
+I<string> contains at least one of the following parameters
+
+'regexp=...;proj=...;sbl=...;'
+
+e.g.
+
+'regexp=some-?evil-?domain;proj=de.wikipedia;'
+
+'sbl=meta;proj=dewiki;'
+
+'sbl=dewiki;proj=dewiki;'
+
+'sbl=meta;proj=all;'
+
+see <https://noc.wikimedia.org/conf/all.dblist> for a complete list of projects
 
 =item B<--test>, B<-t>
 
@@ -100,7 +239,51 @@ don't change anything, just print possible changes.
 
 =item B<--text-replacement>
 
-replace content of pages
+replace content of B<--section> of pages or whole pages. you may choose be a regular
+expression (via B<--search-pattern>) which part to be replaced. the new text may 
+be the content of a given B<--file>.
+
+=over 8
+
+=item B<--file>=I<filename>
+
+the content of this file will be used as replacement.
+
+=item B<--search-pattern>=I<regexp>
+
+I<regexp> is a perl-style search pattern that will be raplaced. 
+
+default = (?s:^.*$)
+
+handle with care. it's always recommended to B<--test> before using.
+
+=item B<--section>=I<string>
+
+use this section in wiki page (e.g. 'some funny section').
+
+=item B<--summary>=I<string>
+
+a one-line summary of the edit (e.g. "inserted ultimate theory")
+
+=item B<--use-eval>
+
+use eval() on replacement text. normally the text will be replaced literally.
+if B<--use-eval> is set, the replacement will be treated like
+
+  replace /pattern/ by eval(replacement)
+
+so if replacement contains something like $1, this will be treated as a 
+back-reference, if B<--use-eval> is set.
+
+=item B<--wikipage>=I<string>
+
+use this wiki page (e.g. 'User:CamelBot/Something').
+          
+=item B<--wikipages>=I<string>
+
+use these wiki pages given by perl-style regexp (e.g. 'page[0-9]+').
+          
+=back
 
 =item B<--update-editfilter-index>
 
@@ -111,20 +294,21 @@ update overview of discussions concerning single rules of edit filter (in w:de)
 upload a file iff this param is set, you should additionally set the following 
 params, too.
 
-=item B<--usource>=I<string>
+=over 8
 
-requires B<--upload> to be set.
+=item B<--source>=I<string>
+
 source filename (e.g. '../somefile.txt')
 
-=item B<--usummary>=I<string>
+=item B<--summary>=I<string>
 
-requires B<--upload> to be set.
 a summary/description of the file (e.g. "robot cat with hat\\n\\n[[Category:Nonsense]]")
 
-=item B<--udest>=I<string>
+=item B<--dest>=I<string>
 
-requires B<--upload> to be set.
 destination filename (e.g. 'a_descriptive_name.txt')
+
+=back
 
 =item B<--username=>I<string>
 
@@ -170,7 +354,7 @@ same as B<--verbose=1>.
 
 =head1 LICENCE
 
-Copyright (c) 2014, seth
+Copyright (c) 2016, seth
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -195,3 +379,4 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 originally written by seth (see https://github.com/wp-seth/camelbot)
+
