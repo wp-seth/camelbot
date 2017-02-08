@@ -14,7 +14,7 @@ use if $_running_on_labs, lib => qw(/data/project/camelbot/perl/lib);
 use Carp;                     # better output on errors for debugging purposes
 use Data::Dumper;             # for debugging purposes
 use File::Path qw(make_path); # create directories
-use File::Slurp qw(slurp write_file); # read/write files
+use File::Slurp qw(slurp write_file);  # read/write files
 use Getopt::Long qw(:config bundling); # cli params
 use Pod::Usage;               # cli params help
 use POSIX qw/strftime/;       # format timestamp
@@ -308,7 +308,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.48.20161219';
+$main::VERSION = '1.49.20170208';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -2058,6 +2058,8 @@ sub syntaxCheck{
 				#lgdomain => ''
 			},
 		});
+		# TODO: maybe this should just be replaced by:
+		# $self->{'mw_api'} = $self->{'mw_bot'}->{'api'};
 		$self->{'mw_api'} = MediaWiki::API->new();
 		my $wiki_base_url = $address_params{'protocol'}.'://'.$address_params{'host'};
 		$self->{'mw_apiurl'} = $wiki_base_url . '/' . $address_params{'path'} . '/api.php';
@@ -2424,9 +2426,14 @@ sub syntaxCheck{
 					if($text =~ /$re_section_heading/g){
 						my $table_begin = pos($text); # begin of table to replace
 						my $tmp = substr($text, $table_begin);
-						$tmp =~ /(?=\n(?:=|\[\[[cC]ategory:))/g;
-						my $table_length = pos($tmp); # length of table to replace
-						$text = substr($text, 0, $table_begin) . $wikitable . 
+						my $table_length;
+						# find end of table
+						if($tmp =~ /(?=\n(?:=|\[\[[cC]ategory:))/g){
+							$table_length = pos($tmp); # length of table to replace
+						}else{ # table goes till end
+							$table_length = length($tmp);
+						}
+						$text = substr($text, 0, $table_begin) . $wikitable .
 							substr($tmp, $table_length);
 					}else{
 						$self->msg(0, 
@@ -3004,7 +3011,7 @@ sub syntaxCheck{
 		my $max_num_talk_pages = 40;
 		my $max_num_days_age = 5;
 		my $edit_filter_name = 'Bearbeitungsfilter';
-		my $lt_page    = 'Wikipedia:'.$edit_filter_name.'/latest topics';
+		my $lt_page    = 'Wikipedia:' . $edit_filter_name . '/latest topics';
 		# api.php?action=query&generator=allpages&gapnamespace=4&gapprefix=Bearbeitungsfilter/&gapfilterredir=nonredirects&gaplimit=500&prop=info|revisions&rvprop=content|timestamp
 		my $pages = [
 			sort {$b->{'revisions'}->[0]->{'timestamp'} cmp $a->{'revisions'}->[0]->{'timestamp'}}
