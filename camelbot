@@ -308,7 +308,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.49.20170208';
+$main::VERSION = '1.51.20170322';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -449,6 +449,7 @@ sub syntaxCheck{
 	use LWP::UserAgent;         # fast, small web browser
 	use MediaWiki::Bot;         # bot for mediawiki, uses mediawiki-api-interface
 	use POSIX qw/strftime/;     # format timestamp
+
 	my %_loaded_mod;
 	$_loaded_mod{'Term::ReadKey'} = eval{
 		require Term::ReadKey;    # used for user input
@@ -1991,7 +1992,7 @@ sub syntaxCheck{
 		$self->{'mw_username'} = ucfirst($self->{'mw_username'});
 		$self->{'mw_username'} =~y/_/ /;
 		$self->msg(1, "login user name is '$self->{'mw_username'}'.");
-		my $cookie = '.mediawiki-bot-'.$self->{'mw_username'}.'-cookies';
+		my $cookie = '.mediawiki-bot-' . $self->{'mw_username'} . '-cookies';
 		# if wiki user password is not defined, search typical password places or let 
 		# user type in wiki user password
 		if(not defined $wiki_password){
@@ -2045,6 +2046,7 @@ sub syntaxCheck{
 			$self->{'wm_proj'} =~ s/wiki\K[pm]edia\z//;
 		}
 		$self->{'mw_bot'} = MediaWiki::Bot->new({
+			#agent       => 'CamelBot',
 			assert      => 'bot',
 			#do_sul      => ($address_params{'host'} =~ /\.wikipedia\.org$/ ? 1 : 0),
 			protocol    => $address_params{'protocol'},
@@ -2063,6 +2065,7 @@ sub syntaxCheck{
 		$self->{'mw_api'} = MediaWiki::API->new();
 		my $wiki_base_url = $address_params{'protocol'}.'://'.$address_params{'host'};
 		$self->{'mw_apiurl'} = $wiki_base_url . '/' . $address_params{'path'} . '/api.php';
+		#$self->{'mw_apiurl'} = $self->{'mw_api'}->{'config'}->{'api_url'};
 		$self->{'mw_api'}->{'config'}->{'api_url'} = $self->{'mw_apiurl'};
 		if(    $self->{'cliparams'}->{'delete'} 
 				or $self->{'cliparams'}->{'upload'} 
@@ -2363,7 +2366,7 @@ sub syntaxCheck{
 				(?<imgpost>"[^>]*+>)                        # ...>
 			<\/a>                                         # <\/a>
 			/$+{'imgpre'}$image_prefix$+{'filename'}$+{'imgpost'}/gx;
-		$html=~s/ srcset="[^"]++"//g;
+		$html =~ s/ srcset="[^"]++"//g;
 		#  html tidy
 		my $html_cleaned = '';
 		my $err = '';
