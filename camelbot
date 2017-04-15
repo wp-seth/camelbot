@@ -513,9 +513,9 @@ sub syntaxCheck{
 					'traditionsverband.de' => qr/\btraditionsverband\.de\b/,
 					'self-ref'    => qr/ref\s*>\s*
 						(?:
-							\[?(?:https?\:)?\/\/[a-z]+\.wikipedia\.org\/wiki\/|    # wikipedia (external link)
-							\[?(?:https?\:)?\/\/www\.wikipedia\.org\/wiki\/Q[1-9]| # wikidata
-							\[\[:[a-z]{2}:                                         # wikipedia (internal link)
+							\[?(?:https?\:)?\/\/[a-z]+\.wikipedia\.org\/wiki\/|   # wikipedia (external link)
+							\[?(?:https?\:)?\/\/www\.wikidata\.org\/wiki\/Q[1-9]| # wikidata
+							\[\[:[a-z]{2}:                                        # wikipedia (internal link)
 						)/x,
 				},
 				'exceptions' => {
@@ -524,7 +524,7 @@ sub syntaxCheck{
 					'local files' => qr/^(?:Uniform Resource (?:Identifier|Locator)|XML Base|XML Shareable Playlist Format)\z/,
 					'finanznachrichten.de' => undef,
 					'traditionsverband.de' => undef,
-					'self-ref'    => undef,
+					'self-ref'    => qr/^Wikipedia\z/,
 				},
 				'notifiers'     => { # requires user:CamelBot/notice-... to exist
 					'ASIN'        => 'Hinweis auf Katalog-Nummern von Amazon', 
