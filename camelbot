@@ -714,7 +714,7 @@ sub syntaxCheck{
 			#	'" "');
 			$changes->{"whitespace vor ref-tag"} = $self->test_and_replace($text, 
 				qr/(?<![|=°])(?<!<\/sup>)(?<!\}\})(?: |&(?:nbsp|thinsp);)(?=<ref\b)/m, 
-				'', !$use_eval_in_repl); # \n will lead to false positives
+				'', !$use_eval_in_repl); # \n will lead to false positives # vim: {{
 			# + }} because of false positive: //de.wikipedia.org/w/index.php?title=Griechische_Staatsschuldenkrise&diff=143759791&oldid=143757358
 			# === specific domains ===
 			# see [https://de.wikipedia.org/w/index.php?title=MediaWiki_Diskussion:
@@ -1648,7 +1648,7 @@ sub syntaxCheck{
 		my $self = shift;
 		my $textref = shift;
 		my $page = shift // 'unknown';
-		my $allowed = 1; # for vim: { { { { { { { {
+		my $allowed = 1; # for vim: { { { { { {
 		if(defined $$textref and $$textref =~ /{{[nN]obots}}|{{[Ii]n(?:use| Bearbeitung)\s*\||
 			[bB]ots\s*+\|\s*+(?:
 				deny\s*+=\s*+(?:
