@@ -311,7 +311,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.51.20170322';
+$main::VERSION = '1.52.20170415';
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
