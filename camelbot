@@ -3730,11 +3730,8 @@ CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, di
 					## find links
 					#my @urls = ($$text =~ /https?:\/\/$self->{'re_url_rear'}/g);
 					#$self->archive_ext_links(\@urls, $page);
-					my $changes = $camelbot->cleanup_wiki_page(\$text, $page);
+					my ($changes, $summary) = $camelbot->cleanup_wiki_page(\$text, $page);
 					if($text_bak ne $text){
-						my $summary = 'kleinere korrekturen ('.
-							(join ', ', grep {$changes->{$_} > 0} keys %$changes).
-							'), siehe [[user:CamelBot]].';
 						$camelbot->time_management();
 						$camelbot->save_wiki_page($page, $summary, \$text, \$text_bak);
 					}
