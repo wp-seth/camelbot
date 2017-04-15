@@ -507,21 +507,29 @@ sub syntaxCheck{
 			'maintenance' => {
 				'text_re' => {
 					'ASIN'        => qr/\bASIN(?:\]\])?[: ]+(?:B[0-9]{2}[A-Z0-9]{7}|[0-9]{9}[0-9X])/,
+					'cat dead'    => qr/\[\[\s*(?i:category|kategorie):\s*[Gg]estorben[\s|_]$current_year\s*(?:\|[^\]]*)?\]\]/,
 					'local files' => qr/\bfile\:\/{3}/i,
 					'finanznachrichten.de' => qr/\bfinanznachrichten\.de\b/,
 					'traditionsverband.de' => qr/\btraditionsverband\.de\b/,
-					'cat dead'    => qr/\[\[\s*(?i:category|kategorie):\s*[Gg]estorben[\s|_]$current_year\s*(?:\|[^\]]*)?\]\]/,
+					'self-ref'    => qr/ref\s*>\s*
+						(?:
+							\[?(?:https?\:)?\/\/[a-z]+\.wikipedia\.org\/wiki\/|    # wikipedia (external link)
+							\[?(?:https?\:)?\/\/www\.wikipedia\.org\/wiki\/Q[1-9]| # wikidata
+							\[\[:[a-z]{2}:                                         # wikipedia (internal link)
+						)/x,
 				},
 				'exceptions' => {
 					'ASIN'        => qr/^Amazon Standard Identification Number\z/,
+					'cat dead'    => undef,
 					'local files' => qr/^(?:Uniform Resource (?:Identifier|Locator)|XML Base|XML Shareable Playlist Format)\z/,
 					'finanznachrichten.de' => undef,
 					'traditionsverband.de' => undef,
-					'cat dead'    => undef,
+					'self-ref'    => undef,
 				},
-				'notifiers'     => {
+				'notifiers'     => { # requires user:CamelBot/notice-... to exist
 					'ASIN'        => 'Hinweis auf Katalog-Nummern von Amazon', 
 					'local files' => 'Hinweis auf Verlinkung lokaler Dateien',
+					'self-ref'    => 'Hinweis auf Selfreferenzierungen', 
 				},
 			},
 			# 0 = don't show diff; 1 = show a diff, 2 = gui
@@ -3271,6 +3279,11 @@ sub syntaxCheck{
 				'local files' => "$i_parts{'intro'}, die mind. eine relative adresse auf die festplatte enthalten.\n\n" . 
 					"$i_parts{'general'} faellt ihm dabei auf, dass in einem artikel eine solche adresse steht, $i_parts{'action'}. " . 
 					"auch das loeschen von eintraegen, die keine solche adresse mehr enthalten, uebernimmt CamelBot.\n\n" . 
+					"$i_parts{'list_section'}",
+				'self-ref' => "$i_parts{'intro'}, die mind. einen [[WP:Belege#Wikipedia_ist_keine_Quelle|selbstreferenz]] enthalten, " . 
+					"also einen unzulaessigen beleg durch einen anderen wikipedia-artikel oder aehnliches.\n\n" . 
+					"$i_parts{'general'} faellt ihm dabei auf, dass ein artikel eine selbstreferenz enthaelt, $i_parts{'action'}. " . 
+					"auch das loeschen von eintraegen, die keine selbstreferenz mehr enthalten, uebernimmt CamelBot.\n\n" . 
 					"$i_parts{'list_section'}",
 			);
 			for my $domain('finanznachrichten.de', 'traditionsverband.de'){
