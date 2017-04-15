@@ -127,7 +127,10 @@ use POSIX qw/strftime/;       # format timestamp
 # 	get information about a given page (or given pages)
 #
 # sub get_pages
-#   get wikipages
+#   get page titles by search or explicitely
+#
+# sub get_pages_content
+#   get content of wikipages
 #
 # sub get_pages_by_prefix
 # 	get all pages and their latest content by prefix
@@ -343,6 +346,7 @@ sub syntaxCheck{
 		'cat-add'            => 0,     # add pages to a category
 		'cat-change'         => 0,     # cat change
 		'cat-dead'           => 0,     # cat of the dead
+		'clean-up'           => undef, # clean-up
 		'db-access'          => 'replica.my.cnf', # filename with database access data 
 		'diff-from'          => undef, # page or revision id to get a diff from
 		'diff-to'            => undef, # version to diff to
@@ -358,6 +362,7 @@ sub syntaxCheck{
 		'rc-monitoring'      => undef, # start rc monitoring via irc or db
 		'use-eval'           => 0,     # use eval on text-replacement
 		'save-as-html'       => undef, # download pages and save as html pages
+		'search'             => undef, # search via api
 		'search-sbl-attempts' => undef, # search the sbl log of blocked edits
 		'section'            => undef, # section in wikipage
 		'text-replacement'   => undef, # text replacing
@@ -380,6 +385,7 @@ sub syntaxCheck{
 		'cat-add',
 		'cat-change|c',
 		'cat-dead',
+		'clean-up',
 		'db-access=s',
 		'diff-from=s',
 		'diff-to=s',
@@ -395,6 +401,7 @@ sub syntaxCheck{
 		'rc-monitoring=s',
 		'use-eval',
 		'save-as-html=s',
+		'search=s',
 		'search-pattern=s',
 		'search-sbl-attempts=s',
 		'section=s',
@@ -706,6 +713,9 @@ sub syntaxCheck{
 			$changes->{'%ig'} = $self->test_and_replace($text, 
 				qr/[0-9]\K(?: |&nbsp;)?%-ig/m, 
 				'%ig', !$use_eval_in_repl);
+			$changes->{'komma vor "sondern"'} = $self->test_and_replace($text, 
+				qr/mehr sondern/m, 
+				'mehr, sondern', !$use_eval_in_repl);
 			$changes->{'°C ([[WP:SVZ]])'} = $self->test_and_replace($text, 
 				qr/°\K(?: |&nbsp;|&thinsp;)C/m, 
 				'C', !$use_eval_in_repl);
@@ -725,7 +735,7 @@ sub syntaxCheck{
 				&cHash=[0-9a-f]+/mx, 
 				'', !$use_eval_in_repl);
 			# == optional fixes==
-			if(scalar(grep {$_>0} values %$changes) > 0){
+			if(scalar(grep {$_ > 0} values %$changes) > 0){
 				# === unicode character 0x200e before categories ===
 				$changes->{'u200e'} = $self->test_and_replace($text, 
 					qr/\x{200e}(?=\]\]|\}\}|\|)/m, 
@@ -781,7 +791,10 @@ sub syntaxCheck{
 			$self->msg(0, '$$text is not defined', 'warning');
 			return $changes;
 		}
-		return $changes;
+		my $summary = (keys %$changes > 0) ? 'kleinere korrekturen (' .
+			(join ', ', grep {$changes->{$_} > 0} keys %$changes) .
+			'), siehe [[user:CamelBot]].' : '';
+		return ($changes, $summary);
 	}
 
 	sub convert_ns{
@@ -1267,7 +1280,7 @@ sub syntaxCheck{
 			$self->msg(0, "no pages found with prefix '$prefix'", 'warning');
 			$success = 0;
 		}else{
-			my $page_texts = $self->{'mw_bot'}->get_pages(\@prefix_pages);
+			my $page_texts = $self->{'mw_bot'}->get_pages_content(\@prefix_pages);
 			if($self->{'verbosity'} >= 1){
 				map {$self->msg(1, "getting '$_'")} sort keys %$page_texts;
 			}
@@ -1419,6 +1432,25 @@ sub syntaxCheck{
 	}
 
 	sub get_pages{
+		my $self = shift;
+		my $collect_types = shift;
+		my $pages = [];
+		$self->msg(2, 'getting pages');
+		if(defined $collect_types->{'from all_pages'}){
+			$pages = $self->get_all_pages(qr/$collect_types->{'from all_pages'}/);
+		}
+		if(defined $collect_types->{'single page'}){
+			utf8::decode($collect_types->{'single page'});
+			push @$pages, $collect_types->{'single page'};
+		}
+		if(defined $collect_types->{'search'}){
+			push @$pages, @{$self->search_pages($collect_types->{'search'})};
+		}
+		$self->msg(3, Dumper($pages));
+		return $pages;
+	}
+
+	sub get_pages_content{
 		# similar to sub text_replacement
 		my $self    = shift;
 		my $pages   = shift; # wiki pages to get
@@ -1434,7 +1466,8 @@ sub syntaxCheck{
 			my @split_text;
 			if(defined $section){
 				my $i = 0;
-				@split_text = grep {++$i % 3} split /^((=+)(?!=).+(?<!=)\2(?:\n|\z))/m, $text;
+				@split_text = grep {++$i % 3} 
+					split /^((=+)(?!=).+(?<!=)\2(?:\n|\z))/m, $text;
 				# 0, 2, 4, ... = text
 				# 1, 3, 5, ... = headings
 				my $section_num = -1;
@@ -2526,6 +2559,13 @@ sub syntaxCheck{
 		return $success;
 	}
 
+	sub search_pages{
+		my $self    = shift;
+		my $search  = shift;
+		my $results = [$self->{'mw_bot'}->search($search)];
+		return $results;
+	}
+
 	sub show_diff{
 		my $self      = shift;
 		my $text      = shift;
@@ -2885,9 +2925,9 @@ sub syntaxCheck{
 		my $repls      = shift; # replacing texts s//X/(e)
 		my $params     = shift;
 		my $use_eval_in_repl = shift;
+		my $clean_up   = shift // 0;
 		my $max_edits  = $params->{'max_edits'};
 		my $skip_edits = $params->{'skip_edits'};
-		my $summary    = $params->{'summary'};
 		$self->msg(1, "loop over pages and replace text");
 		my $edit_counter = -1;
 		my $success = 0;
@@ -2912,12 +2952,16 @@ sub syntaxCheck{
 					next;
 				}
 				my $text_bak = $text;
-				#$self->cleanup_wiki_page(\$text, $page);
+				my ($changes, $summary_clean_up) = (undef, '');
+				if($clean_up){
+					($changes, $summary_clean_up) = $self->cleanup_wiki_page(\$text, $page);
+				}
 				my $text_to_use;
 				my @split_text;
 				if(defined $section){
 					my $i = 0;
-					@split_text = grep {++$i % 3} split /^((=+)(?!=).+(?<!=)\2(?:\n|\z))/m, $text;
+					@split_text = grep {++$i % 3} 
+						split /^((=+)(?!=).+(?<!=)\2(?:\n|\z))/m, $text;
 					# 0, 2, 4, ... = text
 					# 1, 3, 5, ... = headings
 					my $section_num = -1;
@@ -2951,12 +2995,20 @@ sub syntaxCheck{
 				if(defined $section){
 					$text = join '', @split_text;
 				}
-				$self->msg(2, "  $found replacements");
+				$self->msg(2, "  $found replacements") if @$patterns > 0;
 				$self->time_management();
-				$success = $success && $self->save_wiki_page($page, $summary, \$text, \$text_bak);
+				my $summary = $params->{'summary'};
+				if(defined $summary && $summary ne ''){
+					$summary .= '; ' . $summary_clean_up;
+				}else{
+					$summary = $summary_clean_up;
+				}
+				$success = $success && $self->save_wiki_page(
+					$page, $summary, \$text, \$text_bak);
 			}
 		}else{
-			$self->msg(0, 'number of patterns and number of replacements differ', 'error');
+			$self->msg(0, 'number of patterns and number of replacements differ', 
+				'error');
 		}
 		return $success;
 	}
@@ -4044,18 +4096,14 @@ if(defined $params->{'download-by-prefix'}){
 }
 
 if(defined $params->{'get-page'}){
-	my $pages = [];
-	if(defined $params->{'wikipages'}){
-		$pages = $camelbot->get_all_pages(qr/$params->{'wikipages'}/);
-	}
-	if(defined $params->{'wikipage'}){
-		utf8::decode($params->{'wikipage'});
-		push @$pages, $params->{'wikipage'};
-	}
-	$camelbot->msg(3, Dumper($pages));
+	my $pages = $camelbot->get_pages({
+		'single page'    => $params->{'wikipage'},
+		'from all_pages' => $params->{'wikipages'},
+		'search'         => $params->{'search'}
+	});
 	if(@$pages > 0){
 		utf8::decode($params->{'section'});
-		my $pages_content = $camelbot->get_pages($pages, $params->{'section'});
+		my $pages_content = $camelbot->get_pages_content($pages, $params->{'section'});
 		print Dumper $pages_content if $params->{'verbose'} > 0;
 	}else{
 		$camelbot->msg(0, "no pages to be edited.", 'warning');
@@ -4147,9 +4195,9 @@ if(defined $params->{'parse'}){
 	# convert to html
 	my $html = $camelbot->parse_wikitext($wikitext);
 	my $html_cleaned = $camelbot->post_process_html($html);
-	$html_cleaned=~s/\n\K\n+//g;
-	$html_cleaned=~s/.*?<body>\n?//sg;
-	$html_cleaned=~s/<\/body>\n<\/html>\s*$//sg;
+	$html_cleaned =~ s/\n\K\n+//g;
+	$html_cleaned =~ s/.*?<body>\n?//sg;
+	$html_cleaned =~ s/<\/body>\n<\/html>\s*$//sg;
 	# write result
 	write_file($htmlfilename, {binmode => ':utf8'}, $html_cleaned);
 }
@@ -4236,16 +4284,32 @@ if(defined $params->{'search-sbl-attempts'}){
 	}
 }
 
+if(defined $params->{'clean-up'}){
+	my $pages = $camelbot->get_pages({
+		'single page'    => $params->{'wikipage'},
+		'from all_pages' => $params->{'wikipages'},
+		'search'         => $params->{'search'}
+	});
+	if(@$pages > 0){
+		my %options = (
+			'max_edits'  => -1, # maximum number of edits (-1 = inf)
+			'skip_edits' => 0,  # skip number of pages
+			'summary'    => $params->{'summary'} // '',
+		);
+		$camelbot->text_replacement(
+			$pages, undef, [], [], \%options, undef, $params->{'clean-up'});
+	}else{
+		$camelbot->msg(0, "no pages to be edited.", 'warning');
+	}
+}
+
 if(defined $params->{'text-replacement'}){
 	my $use_eval = $params->{'use-eval'};
-	my $pages = [];
-	if(defined $params->{'wikipages'}){
-		$pages = $camelbot->get_all_pages(qr/$params->{'wikipages'}/);
-	}
-	if(defined $params->{'wikipage'}){
-		utf8::decode($params->{'wikipage'});
-		push @$pages, $params->{'wikipage'};
-	}
+	my $pages = $camelbot->get_pages({
+		'single page'    => $params->{'wikipage'},
+		'from all_pages' => $params->{'wikipages'},
+		'search'         => $params->{'search'}
+	});
 	my $pattern = [qr/(?s:^.*$)/];
 	my $replacement = [];
 	if(defined $params->{'search-pattern'}){
@@ -4461,6 +4525,10 @@ mediawiki/wikipedia commands:
      --delete                  delete some pre-defined pages
      --irc                     short for --rc-monitoring=irc
  -l, --link-replacement        replaces pre-defined links 
+     --clean-up                use clean-up functions on given pages
+       --search=s               use the mediawiki search to add matching pages
+       --wikipage=s             use this wiki page (e.g. 'page')
+       --wikipages=s            use these wiki pages by regexp (e.g. 'page[0-9]')
      --text-replacement        replaces text in given wiki pages by regexp or by 
                                 given file
        --file=s                 use content of this file as replacement, i.e., as 
@@ -4470,6 +4538,7 @@ mediawiki/wikipedia commands:
        --section=s              use this section in wiki page (e.g. 'own packages')
        --summary=s              a summary of the edit (mandatory)
        --use-eval               use eval on replacement text (default = no eval)
+       --search=s               use the mediawiki search to add matching pages
        --wikipage=s             use this wiki page (e.g. 'page')
        --wikipages=s            use these wiki pages by regexp (e.g. 'page[0-9]')
  -m, --minor=[01]              mark edit(s) as minor (1) or not (0), default = 1
@@ -4537,6 +4606,11 @@ replaces categories
 
 check recent changes (in dewiki) for additions of categories of (recently) died 
 people
+
+=item B<--clean-up>
+
+use typical clean-up functions on given pages. pages can be given by 
+B<--search>, B<--wikipage>, or B<--wikipages>.
 
 =item B<--db-access=I<filename>>
 
@@ -4685,6 +4759,10 @@ if B<--use-eval> is set, the replacement will be treated like
 so if replacement contains something like $1, this will be treated as a 
 back-reference, if B<--use-eval> is set.
 
+=item B<--search>=I<string>
+
+use the mediawiki search to add all pages that are matched by I<string>.
+          
 =item B<--wikipage>=I<string>
 
 use this wiki page (e.g. 'User:CamelBot/Something').
