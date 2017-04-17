@@ -3184,7 +3184,8 @@ sub syntaxCheck{
 		# rebuild base of maintenance list
 		my $outro = "\n\n[[Kategorie:Wikipedia:Wartungskategorie|$mt_type]]";
 		my $wikitable;
-		if($ml_text =~ /^(.*\n== [lL]iste? ==\n+.*?)(\{\|.*?\|\})\n(.*)$/s){ # extract (save) old intro
+		# extract (save) old intro
+		if($ml_text =~ /^(.*\n== [lL]iste? ==\n+.*?)(\{\|.*?\|\})\n(.*)$/s){ 
 			$intro = $1;
 			$wikitable = $2;
 			$outro = $3;
@@ -3222,13 +3223,16 @@ sub syntaxCheck{
 				$found;
 			} @{$table->{'body'}}
 		];
+		my $summary = 'update maintenance list';
 		# add new list entry
 		if(defined $new_entry and $already_in_list == 0){
-			$self->msg(1, "add new list entry '$page'");
+			$summary = "add new list entry '$page'";
+			$self->msg(1, $summary);
 			# if table has more than 2 columns, then pad each row
 			my @empty_cells = split //, (' ' x $num_add_cols);
 			push @{$table->{'body'}}, [$new_entry, $self->get_date_iso(), @empty_cells];
 		}
+		$summary .= '; number of items = ' . scalar(@{$table->{'body'}});
 		# reset and refill maintenance list
 		$maintenance_lists->{$mt_type} = {}; 
 		for my $entry(@{$table->{'body'}}){
@@ -3240,7 +3244,7 @@ sub syntaxCheck{
 		# rebuild page, i.e., put pieces together and save
 		$ml_text = $intro . $wikitable . $outro;
 		$self->time_management();
-		$self->save_wiki_page($ml, 'update maintenance list', \$ml_text, \$ml_text_bak);
+		$self->save_wiki_page($ml, $summary, \$ml_text, \$ml_text_bak);
 	}
 
 	sub update_maintenance_lists{
@@ -3260,11 +3264,15 @@ sub syntaxCheck{
 		}
 		if(defined $text or not defined $page){
 			my %i_parts = (
-				'intro' => 'dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet',
-				'general' => 'CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden.',
-				'condition_link' => 'faellt ihm dabei auf, dass sich in einem artikel ein verweis auf jene domain befindet',
+				'intro' => 'dies ist eine durch CamelBot befuellte wartungsliste, ' 
+					. 'die kuerzlich bearbeitete artikel auflistet',
+				'general' => 'CamelBot lauscht auf den recent changes, d.h., ' 
+					. 'er schaut sich alle artikel an, die aktuell geaendert wurden.',
+				'condition_link' => 'faellt ihm dabei auf, dass sich in einem artikel ' 
+					. 'ein verweis auf jene domain befindet',
 				'action' => 'meldet er das nach ca. 30 minuten hier auf dieser seite',
-				'deleting_link' => 'auch das loeschen von eintraegen, die einen solchen verweis nicht mehr enthalten, uebernimmt CamelBot.',
+				'deleting_link' => 'auch das loeschen von eintraegen, die ' 
+					. 'einen solchen verweis nicht mehr enthalten, uebernimmt CamelBot.',
 				'list_section' => "== liste ==\n",
 			);
 			my %intros = (
@@ -3564,9 +3572,15 @@ sub syntaxCheck{
 		my $ml_text = $camelbot->{'mw_bot'}->get_text($ml) // '';
 		my $ml_text_bak = $ml_text;
 		# rebuild base of maintenance list
-		my $intro = "dies ist eine durch CamelBot befuellte wartungsliste, die kuerzlich bearbeitete artikel auflistet, die der category ''gestorben 2xxx'' hinzugefuegt wurden.\n
-CamelBot lauscht auf den recent changes, d.h. er schaut sich alle artikel an, die aktuell geaendert wurden. faellt ihm dabei auf, dass ein artikel dieser category hinzugefuegt wird, meldet er das hier auf dieser seite. dabei fuegt er gefundene artikel nur der liste hinzu. loeschen muss man manuell.\n
-== liste ==\n";
+		my $intro = "dies ist eine durch CamelBot befuellte wartungsliste, " 
+			. "die kuerzlich bearbeitete artikel auflistet, die der " 
+			. "category ''gestorben 2xxx'' hinzugefuegt wurden.\n\n" 
+			. "CamelBot lauscht auf den recent changes, d.h., " 
+			. "er schaut sich alle artikel an, die aktuell geaendert wurden. " 
+			. "faellt ihm dabei auf, dass ein artikel dieser category hinzugefuegt " 
+			. "wird, meldet er das hier auf dieser seite. dabei fuegt er gefundene " 
+			. "artikel nur der liste hinzu. loeschen muss man manuell.\n\n" 
+			. "== liste ==\n";
 		my $outro = "\n\n[[Kategorie:Wikipedia:Wartungskategorie|$mt_type]]";
 		my $wikitable;
 		if($ml_text =~ /^(.*\n== [lL]iste? ==\n+.*?)(\{\|.*?\|\})\n(.*)$/s){ # extract (save) old intro
