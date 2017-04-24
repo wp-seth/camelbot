@@ -3663,7 +3663,7 @@ sub syntaxCheck{
 		my $outro = "\n\n[[Kategorie:Wikipedia:Wartungskategorie|$mt_type_page]]";
 		my $wikitable;
 		# extract (save) old intro
-		if($ml_text =~ /^(.*\n== [lL]iste? ==\n+.*?)(\{\|.*?\|\})\n(.*)$/s){ 
+		if($ml_text =~ /^(.*\n== [lL]iste? ==\n+.*?)(\{\|.*?\|\})\n(.*)$/s){
 			$intro = $1;
 			$wikitable = $2;
 			$outro = $3;
@@ -3854,8 +3854,10 @@ sub syntaxCheck{
 		for my $rc_msg(@$rc_pages){
 			if(# $rc_msg->{'user'} eq 'Lustiger seth' or # for debugging only
 				$rc_msg->{'user'} ne $camelbot->{'mw_username'} # don't track own edit
-				and $rc_msg->{'summary'} !~ /\bCamelBot\b.*\b(?:rückgängig gemacht|revertiert)\b/ # don't play edit war
-				and $rc_msg->{'ns_id'} == 0
+				&& (!(defined $rc_msg->{'summary'}) # don't play edit war
+					|| $rc_msg->{'summary'} !~ 
+						/\bCamelBot\b.*\b(?:rückgängig gemacht|revertiert)\b/)
+				&& $rc_msg->{'ns_id'} == 0
 			){
 				# add page to mid term list
 				$self->{'rc_pages_midterm'}->{$rc_msg->{'page_with_ns'}} = 
@@ -4034,7 +4036,9 @@ sub syntaxCheck{
 			];
 			if(@$new_rc_pages > 0){
 				$continue_timestamp = $new_rc_pages->[-1]->{'timestamp'};
-				$camelbot->msg(2, 'last timestamp: ' . $camelbot->get_time_iso_($continue_timestamp));
+				$camelbot->msg(2, 'last timestamp: ' . 
+					$camelbot->get_time_iso_($new_rc_pages->[-1]->{'timestamp_unix'})
+				);
 				# delete all entries of newest timestamp, because they will be re-fetched 
 				# in next step along with others (that maybe of the same timestamp)
 				while(@$new_rc_pages > 0 
