@@ -296,7 +296,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	return http status code of a given url
 #
 # sub msg
-# 	write message to STDOUT
+# 	print message to stdout
 #
 # sub num_unique_elem
 # 	return number of elements, without counting double entries
@@ -311,7 +311,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.53.20170424';
+$main::VERSION = '1.54.0'; # 2017-05-08
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -424,21 +424,24 @@ sub syntaxCheck{
 		# auto_help will not auto make use of 'h'
 		'help|?|h' => sub { Getopt::Long::HelpMessage(
 				-verbose  => 99,
-				-sections => 'NAME|SYNOPSIS|EXAMPLES');},
+				-sections => 'NAME|SYNOPSIS|EXAMPLES'
+			);
+		},
 		'man' => sub { pod2usage(-exitval => 0, -verbose => 2);},
 	) or pod2usage(-exitval => 2);
 	$params{'verbose'} = 1 unless exists $params{'verbose'};
-	my @additional_params = (0,0); # number of additional params (min, max);
+	my @additional_params = (0, 0); # number of additional params (min, max);
 	if(@ARGV < $additional_params[0] or 
-		($additional_params[1] != -1 and @ARGV>$additional_params[1])){
-		if($additional_params[0]==$additional_params[1]){
+		($additional_params[1] != -1 and @ARGV > $additional_params[1])
+	){
+		if($additional_params[0] == $additional_params[1]){
 			print "error: number of arguments must be exactly $additional_params[0]," . 
-				" but is ".(0+@ARGV).".\n";
+				" but is " . (0 + @ARGV) . ".\n";
 		}else{
-			print "error: number of arguments must be at least $additional_params[0]" . 
+			print "error: number of arguments must be at least $additional_params[0]" .
 				" and at most " . 
-				($additional_params[1] == -1 ? 'inf' : $additional_params[1]) . 
-				", but is ".(0+@ARGV).".\n";
+				($additional_params[1] == -1 ? 'inf' : $additional_params[1]) .
+				", but is " . (0 + @ARGV) . ".\n";
 		}
 		print "please use -h for help\n";
 		exit 2;
@@ -2411,7 +2414,10 @@ sub syntaxCheck{
 			'exceptions' => {
 				'ASIN'        => qr/^Amazon Standard Identification Number\z/,
 				'cat dead'    => undef,
-				'local files' => qr/^(?:Uniform Resource (?:Identifier|Locator)|XML Base|XML Shareable Playlist Format)\z/,
+				'local files' => qr/
+					^(?:Uniform\sResource\s(?:Identifier|Locator)|
+					XML\sBase|XML\sShareable\sPlaylist\sFormat)
+				\z/x,
 				'finanznachrichten.de' => undef,
 				'traditionsverband.de' => undef,
 				'self-ref'    => qr/Wikipedia\z/, # 'Wikipedia', 'Spanische Wikipedia', ...
@@ -2425,10 +2431,18 @@ sub syntaxCheck{
 			'page_name'  => { # if not defined, use key
 				'cat dead'    => 'categories of the dead', 
 			},
+			'check_entries' => {
+				'ASIN'                 => 1, 
+				'cat dead'             => 0, 
+				'local files'          => 1, 
+				'finanznachrichten.de' => 1, 
+				'traditionsverband.de' => 1, 
+				'self-ref'             => 1, 
+			},
 		};
 		my %i_parts = (
 			'intro' => 'dies ist eine durch CamelBot befuellte wartungsliste, ' 
-				. 'die kuerzlich bearbeitete artikel auflistet',
+				. 'die kuerzlich (auf wikipedia/wikidata) bearbeitete artikel auflistet',
 			'general' => 'CamelBot lauscht auf den recent changes, d.h., ' 
 				. 'er schaut sich alle artikel an, die aktuell geaendert wurden.',
 			'condition_link' => 'faellt ihm dabei auf, dass sich in einem artikel ' 
@@ -3241,19 +3255,18 @@ sub syntaxCheck{
 		my $maintenance_lists = shift; # maintenance lists
 		my $mt_type           = shift;
 		my $pages             = shift;
-		my $check_entries     = shift;
 		my $additional_col    = shift // []; # ['column1', 'column2', ...]
-		my $intro = $self->{'maintenance'}{'intros'}{$mt_type};
 		my $mt_type_page = $self->{'maintenance'}{'page_name'}{$mt_type} // $mt_type;
 		# get maintenance list
 		my $ml = "User:CamelBot/maintenance list/$mt_type_page";
 		my $ml_text = $self->{'mw_bot'}->get_text($ml) // '';
 		my $ml_text_bak = $ml_text;
 		# rebuild base of maintenance list
+		my $intro = $self->{'maintenance'}{'intros'}{$mt_type} . "== liste ==\n";
 		my $outro = "\n\n[[Kategorie:Wikipedia:Wartungskategorie|$mt_type_page]]";
 		my $wikitable;
 		# extract (save) old intro
-		if($ml_text =~ /^(.*\n== [lL]iste? ==\n+.*?)(\{\|.*?\|\})\n(.*)$/s){ 
+		if($ml_text =~ /^(.*\n== [lL]iste? ==\n+.*?)(\{\|.*?\|\})\n(.*)$/s){
 			$intro = $1;
 			$wikitable = $2;
 			$outro = $3;
@@ -3269,84 +3282,90 @@ sub syntaxCheck{
 		# number of additional (ignored/unchanged) columns
 		my $num_add_cols = @{$table->{'header'}} - 2 - scalar(@$additional_col);
 		$self->msg(1, "number of additional cols = $num_add_cols");
-		# rebuild table: check all old entries; remove entries if possible;
+		# optional: rebuild table: check all old entries; remove entries if possible;
 		# search new entry, if not in array, then push
-		my @added_pages;
-		my $already_in_list = 0;
-		if(@$pages == 0 && $check_entries){
-			push @$pages, {};
-		}
 		my $summary = 'update maintenance list';
-		for my $page(@$pages){
-			my @additional_cells = (); # content of ['column1', 'column2', ...]
-			my $new_entry = defined $page->{'full_page_title'} ? 
-				"[[$page->{'full_page_title'}]]" : undef;
-			$table->{'body'} = [grep {
-					my $row = $_;
-					my $page_content = '';
-					my $shall_remain = 0;
-					if(defined $new_entry){ # check additional cols
-						for(my $i = 0; $i < @$additional_col; ++$i){
-							push @additional_cells, ($page->{$additional_col->[$i]} // '');
-							unless(defined $page->{$additional_col->[$i]} && 
-								$page->{$additional_col->[$i]} eq $row->[$i + 1]
-							){
-								$shall_remain = -1;
-								last;
-							}
+		# 1. @new_entries = grep{not in list already} @$pages
+		my @new_entries = grep {
+			my $page = $_;
+			0 < grep {
+				my $row = $_; # table row
+				my $is_in_list = # check first/main column
+					(defined $page->{'full_page_title'} 
+						&& $row->[0] =~ /^\Q[[$page->{'full_page_title'}]]\E/) ? 1 : 0;
+				if($is_in_list){ # check other columns
+					for(my $i = 0; $i < @$additional_col; ++$i){
+						unless(defined $page->{$additional_col->[$i]} && 
+							defined $row->[$i + 1] &&
+							$page->{$additional_col->[$i]} eq $row->[$i + 1]
+						){
+							$is_in_list = -1;
+							last;
 						}
 					}
-					if($shall_remain > -1 && defined $new_entry 
-						&& $row->[0] =~ /^\Q$new_entry\E/
-					){
-						$self->msg(1, "page '$page->{'full_page_title'}' already in list");
-						$already_in_list = 1;
-						$shall_remain = 1;
-					}elsif($check_entries && 
-							$_->[0] =~ /^\[\[(.*)\]\]/ # (?:\s\[[^\s]+\sedit\])?$
-					){
+				}
+				if($is_in_list >= 1){
+					$self->msg(1, "page '$page->{'full_page_title'}' already in list");
+				}
+				$is_in_list <= 0;
+			} @{$table->{'body'}}
+		} @$pages;
+		# 2. check old entries for deletion
+		if($self->{'maintenance'}{'check_entries'}{$mt_type}){
+			$table->{'body'} = [
+				grep {
+					my $keep_in_list = 0;
+					if($_->[0] =~ /^\[\[(.*)\]\]/){ # (?:\s\[[^\s]+\sedit\])?$
 						my $page_from_list = $1;
 						$self->msg(4, "check '$page_from_list'");
 						# may be deleted meanwhile
-						$page_content = $self->{'mw_bot'}->get_text($page_from_list) // ''; 
-						$shall_remain = 
+						my $page_content = $self->{'mw_bot'}->get_text($page_from_list) // '';
+						$keep_in_list = 
 							$page_content =~ /$self->{'maintenance'}{'text_re'}{$mt_type}/;
-						unless($shall_remain){
+						unless($keep_in_list){
 							$self->msg(4, "regexp did not match");
 						}
 					}
-					# return value for grep
-					$shall_remain > 0;
+					$keep_in_list; # return value for grep
 				} @{$table->{'body'}}
 			];
-			# add new list entry
-			if(defined $new_entry and $already_in_list == 0){
-				$self->msg(1, "add new list entry '$page->{'full_page_title'}'");
-				# if table has more than 2 columns, then pad each row
-				my @empty_cells = split //, (' ' x $num_add_cols);
-				push @{$table->{'body'}}, [
-					$new_entry, 
-					@additional_cells,
-					$self->get_date_iso(), 
-					@empty_cells
-				];
-				push @added_pages, '';
-				$added_pages[-1] .= "[[$page->{'full_page_title'}]]";
-				for(my $i = 0; $i < @$additional_col; ++$i){
-					next if $additional_cells[$i] eq '';
-					$added_pages[-1] .= ', ' . $additional_col->[$i] . ': ' . $additional_cells[$i];
-				}
-				# TODO: add rest of cols
-			}
 		}
-		if(@added_pages > 0){ # TODO, additional_cells nicht vergessen
+		# 3. push @$table, @new_entries
+		my @added_pages;
+		for my $page(@new_entries){
+			$self->msg(1, "add new list entry '$page->{'full_page_title'}'");
+			# if table has more than 2 columns, then pad each row
+			my @empty_cells = split //, (' ' x $num_add_cols);
+			my @additional_cells = (); # content of ['column1', 'column2', ...]
+			push @added_pages, '';
+			$added_pages[-1] .= "[[$page->{'full_page_title'}]]";
+			map {
+				my $add_cell = $page->{$_} // '';
+				if($add_cell ne ''){
+					$added_pages[-1] .= ', ' . $_ . ': ' . $add_cell;
+				}
+				push @additional_cells, $add_cell;
+			} @$additional_col;
+			push @{$table->{'body'}}, [
+				"[[$page->{'full_page_title'}]]", 
+				@additional_cells,
+				$self->get_date_iso(), 
+				@empty_cells
+			];
+		}
+		# create/update summary
+		if(@added_pages > 0){
 			$summary = 'added: ' . join('; ', @added_pages);
 		}
 		$summary .= '; num items = ' . scalar(@{$table->{'body'}});
 		# reset and refill maintenance list
-		$maintenance_lists->{$mt_type} = {}; 
-		for my $entry(@{$table->{'body'}}){
-			$maintenance_lists->{$mt_type}->{substr($entry->[0], 2, -2)} = 1;
+		if(defined $maintenance_lists){
+			$maintenance_lists->{$mt_type} = {}; 
+			for my $entry(@{$table->{'body'}}){
+				if($entry->[0] =~ /^\[\[(.+?)\]\]/){
+					$maintenance_lists->{$mt_type}->{$1} = 1;
+				}
+			}
 		}
 		my $full_auto = 1;
 		# convert array to wikitable
@@ -3394,9 +3413,8 @@ sub syntaxCheck{
 					my $pages = [{
 						'full_page_title' => $page,
 					}];
-					my $check_entries = 1;
 					$self->update_maintenance_lists_build_table( 
-						$maintenance_lists, $mt_type, $pages, $check_entries, $add_column);
+						$maintenance_lists, $mt_type, $pages, $add_column);
 				}
 			}
 			return 1;
@@ -3646,73 +3664,79 @@ sub syntaxCheck{
 		return $rc_pages;
 	}
 
-	sub handle_cat_dead{
-		my $self    = shift;
-		my $mt_type = shift; # cat dead
-		my $pages   = shift;
-		my $additional_col = shift // ['category']; # ['column1', 'column2', ...]
-		my $camelbot = $self->{'camelbot'};
-		my $mt_type_page = $camelbot->{'maintenance'}{'page_name'}{$mt_type} // $mt_type;
-		# get maintenance list
-		my $ml = "User:CamelBot/maintenance list/$mt_type_page";
-		my $ml_text = $camelbot->{'mw_bot'}->get_text($ml) // '';
-		my $ml_text_bak = $ml_text;
-		# rebuild base of maintenance list
-		my $intro = $camelbot->{'maintenance'}{'intros'}{$mt_type}
-			. "== liste ==\n";
-		my $outro = "\n\n[[Kategorie:Wikipedia:Wartungskategorie|$mt_type_page]]";
-		my $wikitable;
-		# extract (save) old intro
-		if($ml_text =~ /^(.*\n== [lL]iste? ==\n+.*?)(\{\|.*?\|\})\n(.*)$/s){
-			$intro = $1;
-			$wikitable = $2;
-			$outro = $3;
-		}else{
-			$camelbot->msg(1, 'could not fetch table. resetting page.', 'notice');
-			$wikitable = '{| class="wikitable sortable"' . "\n" .
-				"! page !! " . 
-				join(' !! ', (@$additional_col, "date of detection by CamelBot")) . 
-				"\n" . '|}';
-		}
-		# get old table content
-		my $table = $camelbot->wikitable2array(\$wikitable);
-		# number of additional (ignored/unchanged) columns
-		my $num_add_cols = @{$table->{'header'}} - 2 - scalar(@$additional_col);
-		$camelbot->msg(1, "number of additional cols = $num_add_cols");
-		# search new entry, if not in array, then push
-		my @added_pages;
-		for my $page(@$pages){
-			my $new_entry = "[[$page->{'full_page_title'}]]";
-			if(grep {
-					$_->[0] eq $new_entry and $_->[1] eq $page->{'category'}
-				} @{$table->{'body'}}
-			){
-				$camelbot->msg(1, "page '$page->{'full_page_title'}' already in list");
-				next;
-			}else{ # add to list
-				$camelbot->msg(1, "add new list entry '$page->{'full_page_title'}'");
-				# if table has more than 3 columns, then pad each row
-				my @empty_cells = split //, (' ' x $num_add_cols);
-				push @{$table->{'body'}}, [
-					$new_entry, 
-					$page->{'category'}, 
-					$camelbot->get_date_iso(), 
-					@empty_cells
-				];
-				push @added_pages, "$page->{'full_page_title'} ($page->{'category'})";
-			}
-		}
-		my $summary = @added_pages == 0 ? 'update maintenance list' : 
-			'added ' . join(', ', @added_pages);
-		my $full_auto = 1;
-		# convert array to wikitable
-		$wikitable = $camelbot->table2wikitext($table, !$full_auto);
-		# rebuild page, i.e., put pieces together and save
-		$ml_text = $intro . $wikitable . $outro;
-		$camelbot->time_management();
-		$camelbot->save_wiki_page($ml, $summary, \$ml_text, \$ml_text_bak);
-		return 1;
-	}
+	# TODO: to be deleted
+	#sub handle_cat_dead{
+	#	my $self              = shift;
+	#	my $maintenance_lists = shift; # maintenance lists
+	#	my $mt_type           = shift; # cat dead
+	#	my $pages             = shift;
+	#	my $additional_col    = shift // []; # ['column1', 'column2', ...]
+	#	my $camelbot = $self->{'camelbot'};
+	#	my $mt_type_page = $camelbot->{'maintenance'}{'page_name'}{$mt_type}
+	#		// $mt_type;
+	#	# get maintenance list
+	#	my $ml = "User:CamelBot/maintenance list/$mt_type_page";
+	#	my $ml_text = $camelbot->{'mw_bot'}->get_text($ml) // '';
+	#	my $ml_text_bak = $ml_text;
+	#	# rebuild base of maintenance list
+	#	my $intro = $camelbot->{'maintenance'}{'intros'}{$mt_type}
+	#		. "== liste ==\n";
+	#	my $outro = "\n\n[[Kategorie:Wikipedia:Wartungskategorie|$mt_type_page]]";
+	#	my $wikitable;
+	#	# extract (save) old intro
+	#	if($ml_text =~ /^(.*\n== [lL]iste? ==\n+.*?)(\{\|.*?\|\})\n(.*)$/s){
+	#		$intro = $1;
+	#		$wikitable = $2;
+	#		$outro = $3;
+	#	}else{ # or create a new one
+	#		$camelbot->msg(1, 'could not fetch table. resetting page.', 'notice');
+	#		$wikitable = '{| class="wikitable sortable"' . "\n" .
+	#			"! page !! " . 
+	#			join(' !! ', (@$additional_col, "date of detection by CamelBot")) . 
+	#			"\n" . '|}';
+	#	}
+	#	# get old table content
+	#	my $table = $camelbot->wikitable2array(\$wikitable);
+	#	# number of additional (ignored/unchanged) columns
+	#	my $num_add_cols = @{$table->{'header'}} - 2 - scalar(@$additional_col);
+	#	$camelbot->msg(1, "number of additional cols = $num_add_cols");
+	#	# search new entry, if not in array, then push
+	#	my @added_pages;
+	#	my $summary = 'update maintenance list';
+	#	for my $page(@$pages){
+	#		my $new_entry = "[[$page->{'full_page_title'}]]";
+	#		if(grep {
+	#				$_->[0] eq $new_entry and $_->[1] eq $page->{'category'}
+	#			} @{$table->{'body'}}
+	#		){
+	#			$camelbot->msg(1, "page '$page->{'full_page_title'}' already in list");
+	#			next;
+	#		}else{ # add to list
+	#			$camelbot->msg(1, "add new list entry '$page->{'full_page_title'}'");
+	#			# if table has more than 3 columns, then pad each row
+	#			my @empty_cells = split //, (' ' x $num_add_cols);
+	#			push @{$table->{'body'}}, [
+	#				$new_entry, 
+	#				$page->{'category'}, 
+	#				$camelbot->get_date_iso(), 
+	#				@empty_cells
+	#			];
+	#			push @added_pages, "$page->{'full_page_title'} ($page->{'category'})";
+	#		}
+	#	}
+	#	if(@added_pages > 0){
+	#		$summary = 'added ' . join('; ', @added_pages);
+	#	}
+	#	$summary .= '; num items = ' . scalar(@{$table->{'body'}});
+	#	my $full_auto = 1;
+	#	# convert array to wikitable
+	#	$wikitable = $camelbot->table2wikitext($table, !$full_auto);
+	#	# rebuild page, i.e., put pieces together and save
+	#	$ml_text = $intro . $wikitable . $outro;
+	#	$camelbot->time_management();
+	#	$camelbot->save_wiki_page($ml, $summary, \$ml_text, \$ml_text_bak);
+	#	return 1;
+	#}
 
 	sub handle_extlinks{
 		my $self     = shift;
@@ -3955,7 +3979,8 @@ sub syntaxCheck{
 			}
 			$camelbot->msg(1, 'got ' . (0 + @$new_entries) . ' new entries');
 			if(@$new_entries > 0){
-				$self->handle_cat_dead('cat dead', $new_entries);
+				$camelbot->update_maintenance_lists_build_table(
+					undef, 'cat dead', $new_entries, ['category']);
 				$sleep_delay = 1; 
 			}else{
 				$sleep_delay = 115; 
@@ -4683,8 +4708,8 @@ meta options:
  -h, --help                    display brief help
      --man                     display long help (man page)
  -q, --silent                  same as --verbose=0
- -v, --verbose                 same as --verbose=1 (default)
- -vv,--very-verbose            same as --verbose=2
+ -v, --verbose                 same as --verbose=2
+ -vv,--very-verbose            same as --verbose=3
  -v, --verbose=x               grade of verbosity
                                 x=0: no output
                                 x=1: default output
@@ -4944,11 +4969,11 @@ same as B<--verbose=0>.
 
 =item B<--very-verbose, -vv>
 
-same as B<--verbose=2>. you may use B<-vvv> for B<--verbose=3> a.s.o.
+same as B<--verbose=3>. you may use B<-vvv> for B<--verbose=4> a.s.o.
 
 =item B<--verbose, -v>
 
-same as B<--verbose=1>.
+same as B<--verbose=2>.
 
 =back
 

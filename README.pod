@@ -51,6 +51,10 @@ mediawiki/wikipedia commands:
      --delete                  delete some pre-defined pages
      --irc                     short for --rc-monitoring=irc
  -l, --link-replacement        replaces pre-defined links 
+     --clean-up                use clean-up functions on given pages
+       --search=s               use the mediawiki search to add matching pages
+       --wikipage=s             use this wiki page (e.g. 'page')
+       --wikipages=s            use these wiki pages by regexp (e.g. 'page[0-9]')
      --text-replacement        replaces text in given wiki pages by regexp or by 
                                 given file
        --file=s                 use content of this file as replacement, i.e., as 
@@ -60,6 +64,7 @@ mediawiki/wikipedia commands:
        --section=s              use this section in wiki page (e.g. 'own packages')
        --summary=s              a summary of the edit (mandatory)
        --use-eval               use eval on replacement text (default = no eval)
+       --search=s               use the mediawiki search to add matching pages
        --wikipage=s             use this wiki page (e.g. 'page')
        --wikipages=s            use these wiki pages by regexp (e.g. 'page[0-9]')
  -m, --minor=[01]              mark edit(s) as minor (1) or not (0), default = 1
@@ -127,6 +132,11 @@ replaces categories
 
 check recent changes (in dewiki) for additions of categories of (recently) died 
 people
+
+=item B<--clean-up>
+
+use typical clean-up functions on given pages. pages can be given by 
+B<--search>, B<--wikipage>, or B<--wikipages>.
 
 =item B<--db-access=I<filename>>
 
@@ -275,6 +285,10 @@ if B<--use-eval> is set, the replacement will be treated like
 so if replacement contains something like $1, this will be treated as a 
 back-reference, if B<--use-eval> is set.
 
+=item B<--search>=I<string>
+
+use the mediawiki search to add all pages that are matched by I<string>.
+          
 =item B<--wikipage>=I<string>
 
 use this wiki page (e.g. 'User:CamelBot/Something').
