@@ -2231,20 +2231,25 @@ sub syntaxCheck{
 							my $text_bak = $text;
 							my $heading = $self->{'maintenance'}->{'notifiers'}->{$ntf_type};
 							if($text =~ /\Q$heading\E/){
-								$self->msg(1, "user '$user_to_inform' seems to be informed already.", 
-									'notice');
+								$self->msg(1, 
+									"user '$user_to_inform' seems to be informed already.", 'notice');
 							}else{
-								my $notice = $self->{'mw_bot'}->get_text('user:CamelBot/notice-' . $ntf_type);
+								my $notice = $self->{'mw_bot'}->get_text(
+									'user:CamelBot/notice-' . $ntf_type);
 								my $title = $self->title2url_part($page);
 								my $wp_path = '//de.wikipedia.org/w/index.php';
 								# replace variables in notice template
-								$notice =~ s/\$diff\b/$wp_path?title=$title&diff=prev&oldid=$hist[0]->{'revid'}/g;
+								my $complete_url = $wp_path . '?title=' . $title 
+									. '&diff=prev&oldid=' . $hist[0]->{'revid'};
+								$notice =~ s/\$diff\b/$complete_url/g;
 								$notice =~ s/\$article\b/$page/g;
 								$notice =~ s/\$signature\b.*/-- ~~~~/sg;
 								$text .= "\n== $heading ==\n$notice\n";
 								$self->time_management();
 								$self->msg(2, "notifying on '$userpage'");
-								$self->save_wiki_page($userpage, $heading, \$text, \$text_bak);
+								my $minor = 0;
+								$self->save_wiki_page(
+									$userpage, $heading, \$text, \$text_bak, $minor);
 							}
 						}
 						$notify = 'no' if $notify eq 'this time';
@@ -2252,7 +2257,8 @@ sub syntaxCheck{
 				}
 			}
 		}else{
-			$self->msg(1, "could not fetch page '$page'. maybe deleted already", 'notice');
+			$self->msg(1, "could not fetch page '$page'. maybe deleted already", 
+				'notice');
 		}
 		return 1;
 	}
@@ -2591,6 +2597,7 @@ sub syntaxCheck{
 		my $summary = shift;
 		my $text = shift;
 		my $orig_text = shift;
+		my $minor = shift // $self->{'minor'};
 		my $success = 1; # no change or just simulation
 		if($$text ne $$orig_text){
 			my $user_answer_diff;
@@ -2613,7 +2620,7 @@ sub syntaxCheck{
 						$self->msg(1, "saving page [[$page]] ... ");
 						push @{$self->{'time_stack'}}, time;
 						my $res = $self->{'mw_bot'}->edit({
-								is_minor => $self->{'minor'},
+								is_minor => $minor,
 								page     => $page_utf8,
 								text     => $$text,
 								bot      => 1,
