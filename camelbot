@@ -2410,7 +2410,7 @@ sub syntaxCheck{
 				'local files' => qr/\bfile\:\/{3}/i,
 				'finanznachrichten.de' => qr/\bfinanznachrichten\.de\b/,
 				'traditionsverband.de' => qr/\btraditionsverband\.de\b/,
-				'self-ref'    => qr/ref\s*>\s*
+				'self-ref'    => qr/<\s*ref\s*>\s*
 					(?:
 						\[?(?:https?\:)?\/\/[a-z]+\.wikipedia\.org\/wiki\/|   # wikipedia
 						\[?(?:https?\:)?\/\/www\.wikidata\.org\/wiki\/Q[1-9]| # wikidata
