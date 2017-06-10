@@ -311,7 +311,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.54.0'; # 2017-05-08
+$main::VERSION = '1.54.1'; # 2017-05-25
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -2414,7 +2414,8 @@ sub syntaxCheck{
 					(?:
 						\[?(?:https?\:)?\/\/[a-z]+\.wikipedia\.org\/wiki\/|   # wikipedia
 						\[?(?:https?\:)?\/\/www\.wikidata\.org\/wiki\/Q[1-9]| # wikidata
-						\[\[:[a-z]{2}:                               # wikipedia (internal link)
+						\[\[w?:[a-z]{2}:                             # wikipedia (internal link)
+						\[\[w:                                       # wikipedia (internal link)
 					)/x,
 			},
 			'exceptions' => {
@@ -3295,7 +3296,7 @@ sub syntaxCheck{
 		# 1. @new_entries = grep{not in list already} @$pages
 		my @new_entries = grep {
 			my $page = $_;
-			0 < grep {
+			0 == grep {
 				my $row = $_; # table row
 				my $is_in_list = # check first/main column
 					(defined $page->{'full_page_title'} 
@@ -3311,10 +3312,10 @@ sub syntaxCheck{
 						}
 					}
 				}
-				if($is_in_list >= 1){
+				if($is_in_list > 0){
 					$self->msg(1, "page '$page->{'full_page_title'}' already in list");
 				}
-				$is_in_list <= 0;
+				$is_in_list > 0;
 			} @{$table->{'body'}}
 		} @$pages;
 		# 2. check old entries for deletion
@@ -3417,9 +3418,10 @@ sub syntaxCheck{
 					}
 					#and $$text =~/(?:[cC]ategory|[kK]ategorie)\s*:\s*[nN]ekrolog/;
 					my $add_column = undef;
-					my $pages = [{
-						'full_page_title' => $page,
-					}];
+					my $pages = [];
+					if(defined $page){
+						push @$pages, {'full_page_title' => $page};
+					}
 					$self->update_maintenance_lists_build_table( 
 						$maintenance_lists, $mt_type, $pages, $add_column);
 				}
