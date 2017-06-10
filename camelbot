@@ -2416,7 +2416,8 @@ sub syntaxCheck{
 						\[?(?:https?\:)?\/\/www\.wikidata\.org\/wiki\/Q[1-9]| # wikidata
 						\[\[w?:[a-z]{2}:                             # wikipedia (internal link)
 						\[\[w:                                       # wikipedia (internal link)
-					)/x,
+					)| Online\s*=\s*https?\:\/\/[a-z]{2,3}\.wikipedia\.org  # wikipedia
+					/x,
 			},
 			'exceptions' => {
 				'ASIN'        => qr/^Amazon Standard Identification Number\z/,
