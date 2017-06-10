@@ -311,7 +311,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.54.1'; # 2017-05-25
+$main::VERSION = '1.54.2'; # 2017-06-10
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -2414,7 +2414,7 @@ sub syntaxCheck{
 					(?:
 						\[?(?:https?\:)?\/\/[a-z]+\.wikipedia\.org\/wiki\/|   # wikipedia
 						\[?(?:https?\:)?\/\/www\.wikidata\.org\/wiki\/Q[1-9]| # wikidata
-						\[\[w?:[a-z]{2}:                             # wikipedia (internal link)
+						\[\[w?:[a-z]{2}:|                            # wikipedia (internal link)
 						\[\[w:                                       # wikipedia (internal link)
 					)| Online\s*=\s*https?\:\/\/[a-z]{2,3}\.wikipedia\.org  # wikipedia
 					/x,
