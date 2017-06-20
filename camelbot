@@ -311,7 +311,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.54.2'; # 2017-06-10
+$main::VERSION = '1.54.3'; # 2017-06-20
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -478,7 +478,7 @@ sub syntaxCheck{
 	};
 	use Time::Local;            # timegm
 	$_loaded_mod{'URI::Escape'} = eval{
-		require URI::Escape;      # uri_escape, uri_unescape
+		require URI::Escape;      # uri_escape_utf8, uri_unescape
 		URI::Escape->import();
 		1;
 	};
@@ -2622,7 +2622,7 @@ sub syntaxCheck{
 						$self->msg(1, "saving page [[$page]] ... ");
 						push @{$self->{'time_stack'}}, time;
 						my $res = $self->{'mw_bot'}->edit({
-								is_minor => $minor,
+								minor    => $minor,
 								page     => $page_utf8,
 								text     => $$text,
 								bot      => 1,
@@ -3482,9 +3482,9 @@ sub syntaxCheck{
 		my $url     = shift;
 		my $escaped = $url;
 		if($_loaded_mod{'URI::Escape'}){
-			$escaped = uri_escape($url);
+			$escaped = uri_escape_utf8($url);
 		}else{
-			$self->msg(0, 'function uri_escape not available. ' . 
+			$self->msg(0, 'function uri_escape_utf8 not available. ' . 
 				'please check installation of perl module URI::Escape', 'error');
 		}
 		return $escaped;
