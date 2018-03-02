@@ -311,7 +311,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.54.3'; # 2017-06-20
+$main::VERSION = '1.54.4'; # 2017-09-04
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -539,6 +539,8 @@ sub syntaxCheck{
 		$query->{'continue'} = '' unless exists $query->{'continue'};
 		my $api_result = $self->api_simple($query, $mw_options, $die_on_error);
 		if(defined $api_result->{'continue'}){
+			$self->msg(5, "got 'continue'");
+			$self->msg(5, Dumper($api_result->{'continue'}));
 			while(my ($k, $v) = each(%{$api_result->{'continue'}})){
 				$query->{$k} = $v;
 			}
@@ -1665,7 +1667,7 @@ sub syntaxCheck{
 		my $textref = shift;
 		my $page = shift // 'unknown';
 		my $allowed = 1; # for vim: { { { { { {
-		if(defined $$textref and $$textref =~ /{{[nN]obots}}|{{[Ii]n(?:use| Bearbeitung)\s*\||
+		if(defined $$textref and $$textref =~ /\{\{[nN]obots}}|\{\{[Ii]n(?:use| Bearbeitung)\s*\||
 			[bB]ots\s*+\|\s*+(?:
 				deny\s*+=\s*+(?:
 					all\s*+}}|
@@ -1677,9 +1679,9 @@ sub syntaxCheck{
 				)
 			)/x){
 			if(defined $+{'allow'}){
-				$allowed = 0 if $+{'allow'} !~/(?:^|,\s*)$self->{'mw_username'}(?:\s*,|$)/;
+				$allowed = 0 if $+{'allow'} !~ /(?:^|,\s*)$self->{'mw_username'}(?:\s*,|$)/;
 			}elsif(defined $+{'deny'}){
-				$allowed = 0 if $+{'deny'} =~/(?:^|,\s*)$self->{'mw_username'}(?:\s*,|$)/;
+				$allowed = 0 if $+{'deny'} =~ /(?:^|,\s*)$self->{'mw_username'}(?:\s*,|$)/;
 			}else{
 				$allowed = 0;
 			}
@@ -2006,7 +2008,7 @@ sub syntaxCheck{
 		}
 		# cope with auto-normalization (bug in MediaWiki::Bot)
 		$self->{'mw_username'} = ucfirst($self->{'mw_username'});
-		$self->{'mw_username'} =~y/_/ /;
+		$self->{'mw_username'} =~ y/_/ /;
 		$self->msg(1, "login user name is '$self->{'mw_username'}'.");
 		my $cookie = '.mediawiki-bot-' . $self->{'mw_username'} . '-cookies';
 		# if wiki user password is not defined, search typical password places or let 
@@ -2428,13 +2430,14 @@ sub syntaxCheck{
 				\z/x,
 				'finanznachrichten.de' => undef,
 				'traditionsverband.de' => undef,
-				'self-ref'    => qr/Wikipedia\z/, # 'Wikipedia', 'Spanische Wikipedia', ...
+				# 'Wikipedia', 'Spanische Wikipedia', 'Wikipedia Zero', ...
+				'self-ref'    => qr/Wikipedia|(?:^(Baidu Baike|Dariusz Jemielniak)\z)/, 
 			},
 			'intros'     => {},
 			'notifiers'  => { # requires page user:CamelBot/notice-... to exist
 				'ASIN'        => 'Hinweis auf Katalog-Nummern von Amazon', 
 				'local files' => 'Hinweis auf Verlinkung lokaler Dateien',
-				'self-ref'    => 'Hinweis auf Selfreferenzierungen', 
+				'self-ref'    => 'Hinweis auf Selbstreferenzierungen', 
 			},
 			'page_name'  => { # if not defined, use key
 				'cat dead'    => 'categories of the dead', 
@@ -2741,11 +2744,15 @@ sub syntaxCheck{
 				(my $pages, $finished) = $self->api_cont($query, $mw_options);
 				my $curr_counter = scalar(@{$pages->{'query'}->{'logevents'}});
 				$log_counter += $curr_counter;
+				$self->msg(4, Dumper($pages->{'query'}->{'logevents'}));
 				push @results, grep {
-						die "undefined url?" unless defined $_->{'params'}->{'url'};
-						$_->{'url'} = $_->{'params'}->{'url'};
-						delete $_->{'params'};
-						$_->{'url'} =~ /$regexp/
+						if(defined $_->{'params'}->{'url'}){
+							$_->{'url'} = $_->{'params'}->{'url'};
+							delete $_->{'params'};
+							$_->{'url'} =~ /$regexp/
+						}else{
+							0;
+						}
 				} @{$pages->{'query'}->{'logevents'}};
 				if($self->{'verbosity'} >= 3 and $curr_counter > 0){
 					my $min_ts = $pages->{'query'}->{'logevents'}->[0]->{'timestamp'};
