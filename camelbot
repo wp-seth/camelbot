@@ -2416,8 +2416,8 @@ sub syntaxCheck{
 					(?:
 						\[?(?:https?\:)?\/\/[a-z]+\.wikipedia\.org\/wiki\/|   # wikipedia
 						\[?(?:https?\:)?\/\/www\.wikidata\.org\/wiki\/Q[1-9]| # wikidata
-						\[\[w?:[a-z]{2}:|                            # wikipedia (internal link)
-						\[\[w:                                       # wikipedia (internal link)
+						\[\[w?:[a-z]{2}:(?!s:)|                      # wikipedia (internal link)
+						\[\[w:(?!s:)                                 # wikipedia (internal link)
 					)| Online\s*=\s*https?\:\/\/[a-z]{2,3}\.wikipedia\.org  # wikipedia
 					/x,
 			},
