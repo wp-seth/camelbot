@@ -311,7 +311,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.54.4'; # 2017-09-04
+$main::VERSION = '1.54.5'; # 2018-03-02
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -2028,13 +2028,13 @@ sub syntaxCheck{
 			unless(defined $wiki_password or
 					(	# $self->{'mw_username'} =~/^(?:CamelBot)$/ and 
 						-e $cookie and
-						not ($self->{'cliparams'}->{'delete'} or $self->{'cliparams'}->{'upload'})
+						not ($self->{'cliparams'}{'delete'} or $self->{'cliparams'}{'upload'})
 					)
 			){
 				if($self->{'verbosity'} >= 1){
 					$self->msg(1, 'could not read password file at places: ');
-					print '  '.$pwfile->[$_].', ' for 0..($#$pwfile-1);
-					print $pwfile->[-1]."\n";
+					print '  ' . $pwfile->[$_] . ', ' for 0..($#$pwfile - 1);
+					print $pwfile->[-1] . "\n";
 				}
 				unless($_running_on_labs){
 					$self->msg(0, "enter password (will not be echoed):");
@@ -4256,7 +4256,7 @@ if(defined $params->{'get-page'}){
 		'search'         => $params->{'search'}
 	});
 	if(@$pages > 0){
-		utf8::decode($params->{'section'});
+		utf8::decode($params->{'section'}) if defined $params->{'section'};
 		my $pages_content = $camelbot->get_pages_content($pages, $params->{'section'});
 		print Dumper $pages_content if $params->{'verbose'} > 0;
 	}else{
@@ -4562,7 +4562,7 @@ if(defined $params->{'text-replacement'}){
 			$options{'max_edits'}     = -1; # maximum number of edits (-1 = inf)
 			$options{'skip_edits'}    = 0;  # skip number of pages
 			$options{'summary'}       = $params->{'summary'};
-			utf8::decode($params->{'section'});
+			utf8::decode($params->{'section'}) if defined $params->{'section'};
 			$camelbot->text_replacement(
 				$pages, $params->{'section'}, $pattern, $replacement, \%options, $use_eval);
 		}else{
@@ -4695,7 +4695,8 @@ mediawiki/wikipedia commands:
        --search=s               use the mediawiki search to add matching pages
        --wikipage=s             use this wiki page (e.g. 'page')
        --wikipages=s            use these wiki pages by regexp (e.g. 'page[0-9]')
- -m, --minor=[01]              mark edit(s) as minor (1) or not (0), default = 1
+ -m, --minor                   mark edit(s) as minor (default)
+     --no-minor                don't mark edit(s) as minor, default = --minor
      --parse=s                 parses wikitext from file and saves result as new 
                                 file
      --rc-monitoring=s         start monitoring of recent changes (in dewiki) via
