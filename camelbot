@@ -837,7 +837,7 @@ sub syntaxCheck{
 				}
 			}
 			# db connection parameters
-			$self->{'db'}->{'host'} = $proj . '.labsdb';
+			$self->{'db'}->{'host'} = $proj . '.analytics.db.svc.eqiad.wmflabs'; # .labsdb
 			#$self->{'db'}->{'host'} = 's1.labsdb';
 			$self->{'db'}->{'name'} = $proj . '_p';
 			$self->{'db'}->{'port'} = '3306';
@@ -1663,11 +1663,11 @@ sub syntaxCheck{
 	}
 
 	sub is_allowed{
-		my $self = shift;
+		my $self    = shift;
 		my $textref = shift;
-		my $page = shift // 'unknown';
+		my $page    = shift // 'unknown';
 		my $allowed = 1; # for vim: { { { { { {
-		if(defined $$textref and $$textref =~ /\{\{[nN]obots(?<nobots>[^}]*|)}}|
+		if(defined($$textref) && $$textref =~ /\{\{[nN]obots(?<nobots>[^}]*|)}}|
 			\{\{[Ii]n(?:use|\sBearbeitung)\s*\|
 			|[bB]ots\s*+\|\s*+(?:
 				deny\s*+=\s*+(?:
