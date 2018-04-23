@@ -311,7 +311,7 @@ use POSIX qw/strftime/;       # format timestamp
 # 	write a 2d-array (= ref to array of refs to arrays) to a csv file
 
 # global vars
-$main::VERSION = '1.54.5'; # 2018-03-02
+$main::VERSION = '1.54.6'; # 2018-04-23
 # avoid 'wide character' warning
 binmode STDOUT, ":encoding(UTF-8)";
 
@@ -1667,8 +1667,9 @@ sub syntaxCheck{
 		my $textref = shift;
 		my $page = shift // 'unknown';
 		my $allowed = 1; # for vim: { { { { { {
-		if(defined $$textref and $$textref =~ /\{\{[nN]obots}}|\{\{[Ii]n(?:use| Bearbeitung)\s*\||
-			[bB]ots\s*+\|\s*+(?:
+		if(defined $$textref and $$textref =~ /\{\{[nN]obots(?<nobots>[^}]*|)}}|
+			\{\{[Ii]n(?:use|\sBearbeitung)\s*\|
+			|[bB]ots\s*+\|\s*+(?:
 				deny\s*+=\s*+(?:
 					all\s*+}}|
 					(?<deny>.*?)}}
@@ -1679,9 +1680,11 @@ sub syntaxCheck{
 				)
 			)/x){
 			if(defined $+{'allow'}){
-				$allowed = 0 if $+{'allow'} !~ /(?:^|,\s*)$self->{'mw_username'}(?:\s*,|$)/;
+				$allowed = 0 if $+{'allow'} !~ /(?:^|,)\s*$self->{'mw_username'}\s*(?:,|$)/;
 			}elsif(defined $+{'deny'}){
-				$allowed = 0 if $+{'deny'} =~ /(?:^|,\s*)$self->{'mw_username'}(?:\s*,|$)/;
+				$allowed = 0 if $+{'deny'} =~ /(?:^|,)\s*$self->{'mw_username'}\s*(?:,|$)/;
+			}elsif(defined $+{'nobots'}){
+				$allowed = 0 if $+{'nobots'} =~ /(?:^\||,)\s*$self->{'mw_username'}\s*(?:,|$)/;
 			}else{
 				$allowed = 0;
 			}
@@ -2411,6 +2414,7 @@ sub syntaxCheck{
 						\s*[Gg]estorben[\s|_]$current_year\s*(?:\|[^\]]*)?\]\]/x,
 				'local files' => qr/\bfile\:\/{3}/i,
 				'finanznachrichten.de' => qr/\bfinanznachrichten\.de\b/,
+				'geni.com'             => qr/\bgeni\.com\b/,
 				'traditionsverband.de' => qr/\btraditionsverband\.de\b/,
 				'self-ref'    => qr/<\s*ref\s*>\s*
 					(?:
@@ -2429,13 +2433,15 @@ sub syntaxCheck{
 					XML\sBase|XML\sShareable\sPlaylist\sFormat)
 				\z/x,
 				'finanznachrichten.de' => undef,
+				'geni.com'             => undef,
 				'traditionsverband.de' => undef,
 				# 'Wikipedia', 'Spanische Wikipedia', 'Wikipedia Zero', ...
-				'self-ref'    => qr/Wikipedia|(?:^(Baidu Baike|Dariusz Jemielniak)\z)/, 
+				'self-ref'    => qr/Wikipedia|(?:^(Baidu Baike|Dariusz Jemielniak)\z)/,
 			},
 			'intros'     => {},
 			'notifiers'  => { # requires page user:CamelBot/notice-... to exist
 				'ASIN'        => 'Hinweis auf Katalog-Nummern von Amazon', 
+				#'geni.com'    => 'Hinweis auf Verlinkung von geni.com', 
 				'local files' => 'Hinweis auf Verlinkung lokaler Dateien',
 				'self-ref'    => 'Hinweis auf Selbstreferenzierungen', 
 			},
@@ -2447,6 +2453,7 @@ sub syntaxCheck{
 				'cat dead'             => 0, 
 				'local files'          => 1, 
 				'finanznachrichten.de' => 1, 
+				'geni.com'             => 1, 
 				'traditionsverband.de' => 1, 
 				'self-ref'             => 1, 
 			},
@@ -2501,7 +2508,7 @@ sub syntaxCheck{
 				"die keine selbstreferenz mehr enthalten, uebernimmt CamelBot.\n\n" . 
 				$i_parts{'list_section'},
 		};
-		for my $domain('finanznachrichten.de', 'traditionsverband.de'){
+		for my $domain('finanznachrichten.de', 'geni.com', 'traditionsverband.de'){
 			$self->{'maintenance'}{'intros'}{$domain} = $i_parts{'intro'} . 
 				", die mind. einen verweis auf $domain enthalten.\n\n" .
 				"$i_parts{'general'} $i_parts{'condition_link'}, $i_parts{'action'}. " . 
